@@ -1,3 +1,2 @@
-# Ignore all CSV and XLSX files
-*.csv
+# Ignore all XLSX files
 *.xlsx
