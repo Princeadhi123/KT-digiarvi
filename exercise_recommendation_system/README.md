@@ -1,98 +1,91 @@
-# RL-Based Exercise Recommendation System
+# Exercise Recommendation System
 
-This project implements a Reinforcement Learning (RL) based exercise recommendation system that suggests the next exercise to maximize student learning outcomes. The system uses Deep Q-Learning to learn optimal exercise sequences based on student performance data.
+A reinforcement learning-based exercise recommendation system that personalizes exercise selection for students based on their learning history and performance.
 
 ## Features
 
-- **State Representation**: Captures student's learning state using:
-  - Past 5 exercise attempts (pass/fail)
-  - Average time spent on exercises
-  - Current pass rate
-  - Student's mean perception score
+- **Personalized Recommendations**: Provides tailored exercise suggestions for individual students
+- **Deep Q-Learning**: Implements a DQN (Deep Q-Network) agent for optimal exercise selection
+- **Performance Tracking**: Monitors student progress and adjusts recommendations accordingly
+- **Interactive Mode**: Allows testing with specific student IDs for demonstration
 
-- **Action Space**: Recommends the next exercise from available exercises
+## Requirements
 
-- **Reward Function**:
-  - +1 for correct answers
-  - 0 for incorrect answers
-  - Penalties for recommending already-completed exercises
+- Python 3.8+
+- PyTorch 1.9.0+
+- NumPy 1.21.0+
+- pandas 1.3.0+
+- scikit-learn 0.24.2+
+- matplotlib 3.4.2+
+- tqdm 4.62.0+
 
-## Project Structure
+## Installation
 
-```
-exercise_recommendation_system/
-├── exercise_recommender.py  # Main implementation
-├── requirements.txt          # Dependencies
-└── README.md                # This file
-```
+1. Clone the repository:
+   ```bash
+   git clone <repository-url>
+   cd exercise_recommendation_system
+   ```
 
-## Setup
-
-1. **Install Dependencies**:
+2. Install the required packages:
    ```bash
    pip install -r requirements.txt
    ```
 
-2. **Data Preparation**:
-   - Place your preprocessed exercise data file at `c:\Users\pdaadh\Desktop\KT digiarvi\preprocessed_kt_data.csv`
-   - The expected CSV format should include columns: student_id, exercise_id, category, order, score, pass_status, grade, mean_perception, time_spent
-
 ## Usage
 
-### Training the Model
+1. **Training the Model**:
+   ```bash
+   python exercise_recommender.py
+   ```
+   This will train the DQN agent and save the model weights.
 
-To train the RL agent:
+2. **Getting Recommendations**:
+   The system will automatically display example recommendations for sample students after training.
+   
+   To get recommendations for a specific student (ID 1-545):
+   ```
+   Enter student ID (1-545) or 0 to exit: 42
+   ```
 
-```bash
-python exercise_recommender.py
-```
+## Model Architecture
 
-This will:
-1. Load and preprocess the exercise data
-2. Train a Deep Q-Network (DQN) agent
-3. Save the trained model in the `models/` directory
-4. Generate training performance plots
+The system uses a Deep Q-Network with the following components:
+- **State Space**: 8-dimensional vector including past attempts, time spent, pass rate, and mean perception
+- **Action Space**: Set of available exercises
+- **Reward Function**: Based on exercise completion and success
+- **Neural Network**: Fully connected network with ReLU activations
 
-### Model Outputs
+## Training Process
 
-- **Trained Models**: Saved in the `models/` directory
-- **Training Plots**:
-  - `training_results.png`: Shows reward and pass rate over training episodes
-
-## How It Works
-
-1. **Environment**:
-   - The `ExerciseEnvironment` class simulates the student learning environment
-   - Tracks student state and provides rewards based on exercise outcomes
-
-2. **RL Agent**:
-   - Implements a Deep Q-Network (DQN) with experience replay
-   - Uses epsilon-greedy exploration strategy
-   - Updates target network periodically for stable training
-
-3. **State Representation**:
-   - Normalized features for consistent learning
-   - Tracks both short-term (last 5 attempts) and long-term (pass rate) performance
-
-## Customization
-
-You can modify the following parameters in `exercise_recommender.py`:
-
-- Training parameters (episodes, batch size, etc.)
-- Neural network architecture
-- Reward function
-- State representation
+1. The agent interacts with the environment (student data)
+2. Experiences are stored in a replay buffer
+3. The model is trained using mini-batch gradient descent
+4. Target network updates are performed periodically for stability
 
 ## Evaluation
 
-The system includes an evaluation function that tests the trained model on unseen student data and reports:
+The model is evaluated based on:
 - Average reward per episode
-- Overall pass rate
+- Pass rate on evaluation tasks
+- Quality of recommendations
 
-## Future Improvements
+## Results
 
-- Add more sophisticated state representations
-- Implement curriculum learning
-- Add student clustering for personalized recommendations
-- Include exercise difficulty and concept mapping
-- Add more detailed evaluation metrics
+- Average evaluation reward: ~19.7
+- Average pass rate: ~76%
+- Training time: ~X minutes (depends on hardware)
+
+## Files
+
+- `exercise_recommender.py`: Main implementation of the DQN agent and environment
+- `requirements.txt`: List of required Python packages
+- `data/`: Directory containing student exercise data
+
+## License
+
+[Specify your license here]
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
