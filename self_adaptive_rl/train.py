@@ -99,10 +99,6 @@ def train():
                 print(f"Current Difficulty: {agent.current_difficulty:.4f}")
                 if len(episode_rewards) > 0:
                     print(f"Avg Reward (last 10): {np.mean(episode_rewards[-10:]):.2f}")
-                
-                # Save model checkpoint
-                checkpoint_path = os.path.join(save_dir, f"checkpoint_{agent.steps_done}.pt")
-                agent.save(checkpoint_path)
         
         # Update metrics
         episode_rewards.append(episode_reward)

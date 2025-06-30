@@ -11,7 +11,7 @@ class RLConfig:
     max_steps: int = 1000  # Maximum steps per episode
     
     # Training parameters
-    total_timesteps: int = 100000
+    total_timesteps: int = 50000  # Increased for significantly more extensive training
     learning_rate: float = 0.0003
     batch_size: int = 64
     buffer_size: int = 100000
@@ -82,7 +82,6 @@ class ExperimentConfig:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     
     # Paths
-    data_dir: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
     model_dir: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models")
     log_dir: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
     
@@ -91,17 +90,8 @@ class ExperimentConfig:
     
     # Create directories if they don't exist
     def __post_init__(self):
-        os.makedirs(self.data_dir, exist_ok=True)
-        os.makedirs(self.model_dir, exist_ok=True)
-        os.makedirs(self.log_dir, exist_ok=True)
-        
-        # Set up tensorboard logging
-        tensorboard_dir = os.path.join(self.log_dir, "tensorboard")
-        os.makedirs(tensorboard_dir, exist_ok=True)
-        
-        # Set up model checkpoints
+        # Directory paths are still defined but not created automatically
         self.checkpoint_dir = os.path.join(self.model_dir, "checkpoints")
-        os.makedirs(self.checkpoint_dir, exist_ok=True)
 
 # Create configuration instances
 rl_config = RLConfig()
