@@ -91,40 +91,54 @@ class DifficultyPredictor:
         return state
 
 def main():
-    # Example usage - using relative path from the script's location
+    # Initialize predictor with the trained model
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     script_dir = os.path.dirname(os.path.abspath(__file__))
     model_path = os.path.join(script_dir, "models", "model_20250630_222553", "best_model_ep20_reward10.78.pt")
-    print(f"Loading model from: {model_path}")
+    data_path = os.path.join(base_dir, "preprocessed_kt_data.csv")
     
-    # Initialize predictor
     try:
+        # Initialize the test environment
+        print("Initializing test environment...")
+        test_env = StudentLearningEnv(
+            data_path=data_path,
+            config=curriculum_config,  # Changed from curriculum_config to config
+            split='test',
+            seed=experiment_config.seed + 2  # Different seed than train/val
+        )
+        
+        # Initialize predictor with the same state/action space as the environment
         predictor = DifficultyPredictor(model_path)
         print("Model loaded successfully!")
+        
+        # Run predictions on test data
+        print("\nMaking predictions on test set...")
+        test_students = test_env.data['student_id'].unique()
+        print(f"Number of test students: {len(test_students)}")
+        
+        # Get predictions for first few test students as example
+        num_examples = min(5, len(test_students))
+        print(f"\nExample predictions for {num_examples} test students:")
+        
+        for i in range(num_examples):
+            # Reset environment to get a test student
+            state = test_env.reset()
+            student_id = test_env.current_student_id
+            
+            # Get student data for prediction
+            student_data = test_env.current_student_data.iloc[0].to_dict()
+            
+            # Make prediction
+            prediction = predictor.predict_difficulty(student_data)
+            
+            print(f"\nStudent {i+1} (ID: {student_id}):")
+            print(f"- Score: {student_data['score']:.2f}")
+            print(f"- Pass Rate: {student_data['pass_rate']:.2f}")
+            print(f"- Recommended Difficulty: {prediction['difficulty_level']} (0-4)")
+            print(f"  Confidence: {prediction['confidence_scores'][f'level_{prediction['difficulty_level']}']*100:.1f}%")
+    
     except Exception as e:
-        print(f"Error loading model: {e}")
-        return
-    
-    # Example student data (replace with actual data)
-    example_student = {
-        'score': 0.75,               # Normalized score (0-1)
-        'time_spent': 0.6,           # Normalized time spent
-        'total_attempts': 0.4,       # Normalized attempts
-        'cumulative_passes': 0.7,    # Normalized passes
-        'pass_rate': 0.8,            # Pass rate
-        'mean_perception': 0.65,     # Mean perception
-        'sex': 'Boy'                 # Gender
-    }
-    
-    # Make prediction
-    prediction = predictor.predict_difficulty(example_student)
-    
-    # Print results
-    print("\nPrediction Results:")
-    print(f"Recommended Difficulty Level: {prediction['difficulty_level']} (0-4)")
-    print(f"Difficulty Score: {prediction['difficulty_score']:.2f} (0.1-1.0)")
-    print("\nConfidence Scores:")
-    for level, score in prediction['confidence_scores'].items():
-        print(f"  {level}: {score*100:.1f}%")
+        print(f"Error during prediction: {e}")
 
 if __name__ == "__main__":
     main()
