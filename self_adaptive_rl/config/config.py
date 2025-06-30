@@ -11,21 +11,21 @@ class RLConfig:
     max_steps: int = 1000  # Maximum steps per episode
     
     # Training parameters
-    total_timesteps: int = 50000  # Increased for significantly more extensive training
-    learning_rate: float = 0.0003
-    batch_size: int = 64
-    buffer_size: int = 100000
-    learning_starts: int = 1000
-    train_freq: int = 1
-    target_update_interval: int = 1000
-    gamma: float = 0.99
-    tau: float = 0.005
-    gradient_steps: int = 1
+    total_timesteps: int = 10000000  # Increased for 10,000 episodes (10M timesteps)
+    learning_rate: float = 0.00025  # Slightly reduced for more stable training
+    batch_size: int = 128  # Increased batch size for more stable gradients
+    buffer_size: int = 200000  # Larger replay buffer for better experience replay
+    learning_starts: int = 5000  # More initial random steps for better exploration
+    train_freq: int = 4  # Update the model every 4 steps
+    target_update_interval: int = 1000  # Keep target network update frequency
+    gamma: float = 0.99  # Discount factor (good default)
+    tau: float = 0.01  # Slightly higher for more stable target network updates
+    gradient_steps: int = 1  # Keep as is for now
     
     # Exploration parameters
-    exploration_initial_eps: float = 1.0
-    exploration_final_eps: float = 0.01
-    exploration_fraction: float = 0.1
+    exploration_initial_eps: float = 1.0  # Start with full exploration
+    exploration_final_eps: float = 0.02  # Slightly higher final epsilon for better exploration
+    exploration_fraction: float = 0.15  # Increased exploration duration
     
     # Model architecture
     policy_kwargs: Dict = None
@@ -37,19 +37,19 @@ class RLConfig:
     def __post_init__(self):
         if self.policy_kwargs is None:
             self.policy_kwargs = dict(
-                net_arch=[dict(pi=[64, 64], qf=[64, 64])]
+                net_arch=[dict(pi=[128, 128], qf=[128, 128])]  # Deeper network with more units
             )
 
 @dataclass
 class CurriculumConfig:
     # Curriculum learning parameters
-    initial_difficulty: float = 0.3
-    min_difficulty: float = 0.1
-    max_difficulty: float = 1.0
-    difficulty_step: float = 0.05
-    success_threshold: float = 0.8  # Success rate to increase difficulty
-    failure_threshold: float = 0.3  # Failure rate to decrease difficulty
-    window_size: int = 100  # Window size for success rate calculation
+    initial_difficulty: float = 0.2  # Start with slightly easier difficulty
+    min_difficulty: float = 0.05    # Allow for easier exercises
+    max_difficulty: float = 1.2     # Allow for more challenging exercises
+    difficulty_step: float = 0.1    # Larger steps for more aggressive adjustments
+    success_threshold: float = 0.7  # Lower success threshold to increase difficulty more quickly
+    failure_threshold: float = 0.4  # Higher failure threshold to decrease difficulty more readily
+    window_size: int = 50           # Smaller window for more responsive difficulty adjustments
     
     # Student model parameters
     student_learning_rate: float = 0.001
