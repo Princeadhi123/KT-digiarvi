@@ -11,7 +11,7 @@ class RLConfig:
     max_steps: int = 1000  # Maximum steps per episode
     
     # Training parameters
-    total_timesteps: int = 10000000  # Increased for 10,000 episodes (10M timesteps)
+    total_timesteps: int = 100000  # Increased for 10,000 episodes (10M timesteps)
     learning_rate: float = 0.00025  # Slightly reduced for more stable training
     batch_size: int = 128  # Increased batch size for more stable gradients
     buffer_size: int = 200000  # Larger replay buffer for better experience replay

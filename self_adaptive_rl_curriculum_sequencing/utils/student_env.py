@@ -15,12 +15,17 @@ class StudentLearningEnv(gym.Env):
     selects exercises of varying difficulty for the student.
     """
     
-    def __init__(self, data_path: str, config: 'CurriculumConfig'):
+    def __init__(self, data_path: str, config: 'CurriculumConfig', split: str = 'train', seed: int = 42):
         super(StudentLearningEnv, self).__init__()
         
-        # Load and preprocess student data
-        self.data = self._load_data(data_path)
+        # Set random seed for reproducibility
+        self.seed = seed
+        np.random.seed(seed)
+        
+        # Load and preprocess student data with split
+        self.data = self._load_and_split_data(data_path, split)
         self.student_ids = self.data['student_id'].unique()
+        self.split = split
         self.current_student_id = None
         self.current_student_data = None
         self.current_exercise_idx = 0
@@ -51,8 +56,9 @@ class StudentLearningEnv(gym.Env):
         # Reset environment
         self.reset()
     
-    def _load_data(self, data_path: str) -> pd.DataFrame:
-        """Load and preprocess student data."""
+    def _load_and_split_data(self, data_path: str, split: str) -> pd.DataFrame:
+        """Load and preprocess student data with train/validation/test split."""
+        # Load and preprocess data
         df = pd.read_csv(data_path)
         
         # Convert categorical variables to numerical
@@ -62,8 +68,29 @@ class StudentLearningEnv(gym.Env):
         numerical_cols = ['score', 'time_spent', 'total_attempts', 'cumulative_passes', 'pass_rate']
         for col in numerical_cols:
             df[col] = (df[col] - df[col].min()) / (df[col].max() - df[col].min() + 1e-8)
-            
-        return df
+        
+        # Split by student IDs to prevent data leakage
+        student_ids = df['student_id'].unique()
+        np.random.shuffle(student_ids)
+        
+        # 70% train, 15% validation, 15% test split
+        train_size = int(0.7 * len(student_ids))
+        val_size = int(0.15 * len(student_ids))
+        
+        if split == 'train':
+            selected_ids = student_ids[:train_size]
+        elif split == 'val':
+            selected_ids = student_ids[train_size:train_size + val_size]
+        elif split == 'test':
+            selected_ids = student_ids[train_size + val_size:]
+        else:
+            raise ValueError("split must be 'train', 'val', or 'test'")
+        
+        return df[df['student_id'].isin(selected_ids)]
+    
+    # Keep backward compatibility
+    def _load_data(self, data_path: str) -> pd.DataFrame:
+        return self._load_and_split_data(data_path, 'train')
     
     def _build_student_model(self) -> nn.Module:
         """Build a simple neural network to simulate student learning."""
