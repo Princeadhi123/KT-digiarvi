@@ -53,9 +53,18 @@ class CurriculumEnvV2:
     Reward (shaped): 0.5 * 1{action == target_next_category} + 0.5 * next_normalized_score
     """
 
-    def __init__(self, data_path: str, train_ratio: float = 0.7, val_ratio: float = 0.15, seed: int = 42):
+    def __init__(self, data_path: str, train_ratio: float = 0.7, val_ratio: float = 0.15, seed: int = 42,
+                 reward_correct_w: float = 0.5, reward_score_w: float = 0.5):
         self.rng = np.random.default_rng(seed)
         self.df = pd.read_csv(data_path)
+
+        # Reward weighting (normalized to sum to 1 when possible)
+        total_w = float(reward_correct_w) + float(reward_score_w)
+        if total_w <= 0:
+            self.rw_correct, self.rw_score = 1.0, 0.0
+        else:
+            self.rw_correct = float(reward_correct_w) / total_w
+            self.rw_score = float(reward_score_w) / total_w
 
         # Required columns check
         required = [
@@ -167,8 +176,8 @@ class CurriculumEnvV2:
         target_cat = int(next_row["category_id"])
         corr = 1.0 if int(action) == target_cat else 0.0
         next_norm_score = float(next_row.get("normalized_score", 0.0))
-        reward = 0.5 * corr + 0.5 * next_norm_score
-
+        reward = self.rw_correct * corr + self.rw_score * next_norm_score
+        
         self.ptr += 1
         done = self.ptr >= len(self.current_student_df) - 1
         next_state = self._build_state_from_row(self.current_student_df.iloc[self.ptr])
@@ -246,36 +255,54 @@ def eval_policy_category_accuracy(env: CurriculumEnvV2, policy_fn, mode: str = "
 # DQN
 # -----------------------------
 
-class QNet(nn.Module):
+class DuelingQNet(nn.Module):
     def __init__(self, state_dim: int, n_actions: int):
         super().__init__()
-        self.net = nn.Sequential(
+        self.feature = nn.Sequential(
             nn.Linear(state_dim, 128), nn.ReLU(),
             nn.Linear(128, 128), nn.ReLU(),
-            nn.Linear(128, n_actions),
         )
+        self.adv = nn.Linear(128, n_actions)
+        self.val = nn.Linear(128, 1)
 
     def forward(self, x):
-        return self.net(x)
+        z = self.feature(x)
+        adv = self.adv(z)
+        val = self.val(z)
+        q = val + (adv - adv.mean(dim=1, keepdim=True))
+        return q
 
 
 class DQNAgent:
-    def __init__(self, state_dim: int, n_actions: int, device: str = "cpu"):
+    def __init__(self, state_dim: int, n_actions: int, device: str = "cpu",
+                 eps_start: float = 1.0, eps_end: float = 0.05, eps_decay_steps: int = 20000,
+                 target_tau: float = 0.01, target_update_interval: int = 1):
         self.device = torch.device(device)
         self.n_actions = n_actions
-        self.q = QNet(state_dim, n_actions).to(self.device)
-        self.q_tgt = QNet(state_dim, n_actions).to(self.device)
+        self.q = DuelingQNet(state_dim, n_actions).to(self.device)
+        self.q_tgt = DuelingQNet(state_dim, n_actions).to(self.device)
         self.q_tgt.load_state_dict(self.q.state_dict())
         self.optim = optim.Adam(self.q.parameters(), lr=1e-3)
         self.gamma = 0.99
-        self.epsilon = 1.0
-        self.eps_min = 0.05
-        self.eps_decay = 0.995
+        # Epsilon schedule (linear)
+        self.eps_start = float(eps_start)
+        self.eps_end = float(eps_end)
+        self.eps_decay_steps = int(eps_decay_steps)
+        self.steps_done = 0
         self.batch_size = 128
-        self.buf = deque(maxlen=10000)
+        self.buf = deque(maxlen=20000)
+        # Target update
+        self.target_tau = float(target_tau)
+        self.target_update_interval = int(target_update_interval)
+
+    def _epsilon(self):
+        t = min(self.steps_done, self.eps_decay_steps)
+        frac = 1.0 - (t / max(1, self.eps_decay_steps))
+        return self.eps_end + (self.eps_start - self.eps_end) * frac
 
     def act(self, state: np.ndarray, training: bool = True) -> int:
-        if training and random.random() < self.epsilon:
+        eps = self._epsilon()
+        if training and random.random() < eps:
             return random.randrange(self.n_actions)
         with torch.no_grad():
             s = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
@@ -284,6 +311,11 @@ class DQNAgent:
 
     def remember(self, s, a, r, ns, d):
         self.buf.append((s, a, r, ns, d))
+
+    def _soft_update_target(self):
+        with torch.no_grad():
+            for tgt, src in zip(self.q_tgt.parameters(), self.q.parameters()):
+                tgt.data.copy_((1.0 - self.target_tau) * tgt.data + self.target_tau * src.data)
 
     def replay(self):
         if len(self.buf) < self.batch_size:
@@ -294,28 +326,39 @@ class DQNAgent:
         a = torch.tensor(a, dtype=torch.long, device=self.device).unsqueeze(1)
         r = torch.tensor(r, dtype=torch.float32, device=self.device).unsqueeze(1)
         non_final_mask = torch.tensor([ns_i is not None for ns_i in ns], device=self.device, dtype=torch.bool)
-        ns_non_final = torch.tensor(np.stack([ns_i for ns_i in ns if ns_i is not None]) if any(non_final_mask.cpu().numpy()) else np.zeros((0, s.shape[1])), dtype=torch.float32, device=self.device)
+        ns_non_final = torch.tensor(
+            np.stack([ns_i for ns_i in ns if ns_i is not None]) if any(non_final_mask.cpu().numpy()) else np.zeros((0, s.shape[1])),
+            dtype=torch.float32, device=self.device)
         q_sa = self.q(s).gather(1, a)
         q_next = torch.zeros(self.batch_size, 1, device=self.device)
         if ns_non_final.shape[0] > 0:
-            q_next[non_final_mask] = self.q_tgt(ns_non_final).max(1, keepdim=True)[0]
+            # Double DQN: action from online, value from target
+            next_online_q = self.q(ns_non_final)
+            next_actions = torch.argmax(next_online_q, dim=1)
+            next_target_q = self.q_tgt(ns_non_final).gather(1, next_actions.unsqueeze(1))
+            q_next[non_final_mask] = next_target_q
         y = r + (1 - torch.tensor(d, dtype=torch.float32, device=self.device).unsqueeze(1)) * self.gamma * q_next
         loss = F.smooth_l1_loss(q_sa, y.detach())
         self.optim.zero_grad()
         loss.backward()
         nn.utils.clip_grad_norm_(self.q.parameters(), 1.0)
         self.optim.step()
-        if self.epsilon > self.eps_min:
-            self.epsilon *= self.eps_decay
+        self.steps_done += 1
+        if self.target_update_interval > 0 and (self.steps_done % self.target_update_interval == 0):
+            self._soft_update_target()
         return float(loss.item())
 
     def update_target(self):
         self.q_tgt.load_state_dict(self.q.state_dict())
 
 
-def train_dqn(env: CurriculumEnvV2, episodes: int = 50, device: str = None) -> DQNAgent:
+def train_dqn(env: CurriculumEnvV2, episodes: int = 50, device: str = None,
+              eps_start: float = 1.0, eps_end: float = 0.05, eps_decay_steps: int = 20000,
+              target_tau: float = 0.01, target_update_interval: int = 1) -> DQNAgent:
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    agent = DQNAgent(env.state_dim, env.action_size, device=device)
+    agent = DQNAgent(env.state_dim, env.action_size, device=device,
+                     eps_start=eps_start, eps_end=eps_end, eps_decay_steps=eps_decay_steps,
+                     target_tau=target_tau, target_update_interval=target_update_interval)
     for ep in range(episodes):
         s = env.reset("train")
         done = False
@@ -327,8 +370,9 @@ def train_dqn(env: CurriculumEnvV2, episodes: int = 50, device: str = None) -> D
             agent.replay()
             s = ns if not done else s
             steps += 1
-        if (ep + 1) % 10 == 0:
-            agent.update_target()
+        # Hard sync every few episodes to reduce drift
+        if (ep + 1) % 20 == 0:
+            agent.q_tgt.load_state_dict(agent.q.state_dict())
     return agent
 
 
@@ -571,8 +615,10 @@ def run_all_and_report(
     ppo_episodes: int = 50,
     eval_episodes: int = 300,
     models: List[str] = None,
+    reward_correct_w: float = 0.5,
+    reward_score_w: float = 0.5,
 ):
-    env = CurriculumEnvV2(data_path)
+    env = CurriculumEnvV2(data_path, reward_correct_w=reward_correct_w, reward_score_w=reward_score_w)
     if models is None:
         models = ["ql", "dqn", "a2c", "a3c", "ppo"]
 
@@ -620,6 +666,8 @@ if __name__ == "__main__":
     parser.add_argument("--a3c_episodes", type=int, default=50)
     parser.add_argument("--ppo_episodes", type=int, default=50)
     parser.add_argument("--eval_episodes", type=int, default=300)
+    parser.add_argument("--reward_correct_w", type=float, default=0.5, help="Weight for correctness in reward")
+    parser.add_argument("--reward_score_w", type=float, default=0.5, help="Weight for next score in reward")
     parser.add_argument("--models", type=str, default="ql,dqn,a2c,a3c,ppo", help="Comma-separated models to run")
     args = parser.parse_args()
 
@@ -634,4 +682,6 @@ if __name__ == "__main__":
         ppo_episodes=args.ppo_episodes,
         eval_episodes=args.eval_episodes,
         models=model_list,
+        reward_correct_w=args.reward_correct_w,
+        reward_score_w=args.reward_score_w,
     )
