@@ -1,22 +1,24 @@
 import random
 from collections import deque
+import copy
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from evaluation import eval_policy_category_accuracy
 
 
 class DuelingQNet(nn.Module):
-    def __init__(self, state_dim: int, n_actions: int):
+    def __init__(self, state_dim: int, n_actions: int, hidden_dim: int = 128):
         super().__init__()
         self.feature = nn.Sequential(
-            nn.Linear(state_dim, 128), nn.ReLU(),
-            nn.Linear(128, 128), nn.ReLU(),
+            nn.Linear(state_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
         )
-        self.adv = nn.Linear(128, n_actions)
-        self.val = nn.Linear(128, 1)
+        self.adv = nn.Linear(hidden_dim, n_actions)
+        self.val = nn.Linear(hidden_dim, 1)
 
     def forward(self, x):
         z = self.feature(x)
@@ -29,21 +31,23 @@ class DuelingQNet(nn.Module):
 class DQNAgent:
     def __init__(self, state_dim: int, n_actions: int, device: str = "cpu",
                  eps_start: float = 1.0, eps_end: float = 0.05, eps_decay_steps: int = 20000,
-                 target_tau: float = 0.01, target_update_interval: int = 1):
+                 target_tau: float = 0.01, target_update_interval: int = 1,
+                 lr: float = 1e-3, gamma: float = 0.99, batch_size: int = 128, buffer_size: int = 20000,
+                 hidden_dim: int = 128):
         self.device = torch.device(device)
         self.n_actions = n_actions
-        self.q = DuelingQNet(state_dim, n_actions).to(self.device)
-        self.q_tgt = DuelingQNet(state_dim, n_actions).to(self.device)
+        self.q = DuelingQNet(state_dim, n_actions, hidden_dim=hidden_dim).to(self.device)
+        self.q_tgt = DuelingQNet(state_dim, n_actions, hidden_dim=hidden_dim).to(self.device)
         self.q_tgt.load_state_dict(self.q.state_dict())
-        self.optim = optim.Adam(self.q.parameters(), lr=1e-3)
-        self.gamma = 0.99
+        self.optim = optim.Adam(self.q.parameters(), lr=lr)
+        self.gamma = gamma
         # Epsilon schedule (linear)
         self.eps_start = float(eps_start)
         self.eps_end = float(eps_end)
         self.eps_decay_steps = int(eps_decay_steps)
         self.steps_done = 0
-        self.batch_size = 128
-        self.buf = deque(maxlen=20000)
+        self.batch_size = int(batch_size)
+        self.buf = deque(maxlen=int(buffer_size))
         # Target update
         self.target_tau = float(target_tau)
         self.target_update_interval = int(target_update_interval)
@@ -107,11 +111,17 @@ class DQNAgent:
 
 def train_dqn(env, episodes: int = 50, device: str = None,
               eps_start: float = 1.0, eps_end: float = 0.05, eps_decay_steps: int = 20000,
-              target_tau: float = 0.01, target_update_interval: int = 1) -> DQNAgent:
+              target_tau: float = 0.01, target_update_interval: int = 1,
+              lr: float = 1e-3, gamma: float = 0.99, batch_size: int = 128, buffer_size: int = 20000,
+              hidden_dim: int = 128, select_best_on_val: bool = True, val_episodes: int = 300) -> DQNAgent:
         device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         agent = DQNAgent(env.state_dim, env.action_size, device=device,
                          eps_start=eps_start, eps_end=eps_end, eps_decay_steps=eps_decay_steps,
-                         target_tau=target_tau, target_update_interval=target_update_interval)
+                         target_tau=target_tau, target_update_interval=target_update_interval,
+                         lr=lr, gamma=gamma, batch_size=batch_size, buffer_size=buffer_size,
+                         hidden_dim=hidden_dim)
+        best_acc = -1.0
+        best_state = None
         for ep in range(episodes):
             s = env.reset("train")
             done = False
@@ -126,6 +136,15 @@ def train_dqn(env, episodes: int = 50, device: str = None,
             # Hard sync every few episodes to reduce drift
             if (ep + 1) % 20 == 0:
                 agent.q_tgt.load_state_dict(agent.q.state_dict())
+            # Validation selection
+            if select_best_on_val and ((ep + 1) % 5 == 0 or ep == episodes - 1):
+                val_acc, _ = eval_policy_category_accuracy(env, dqn_policy(agent), mode="val", episodes=val_episodes)
+                if val_acc > best_acc:
+                    best_acc = val_acc
+                    best_state = copy.deepcopy(agent.q.state_dict())
+        if select_best_on_val and best_state is not None:
+            agent.q.load_state_dict(best_state)
+            agent.q_tgt.load_state_dict(agent.q.state_dict())
         return agent
 
 
