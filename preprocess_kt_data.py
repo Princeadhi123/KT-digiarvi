@@ -1,10 +1,11 @@
 import pandas as pd
 import numpy as np
 from pathlib import Path
+from datetime import datetime
 
 # File paths
-input_file = 'V3_1b polished and anonymized (1).xlsx'
-output_file = 'preprocessed_kt_data.csv'
+input_file = Path(r'c:\Users\pdaadh\Desktop\KT digiarvi\V3_1b polished and anonymized (1).xlsx')
+output_file = Path('preprocessed_kt_data.csv')
 
 print(f"Reading data from {input_file}...")
 # Read the Excel file
@@ -42,6 +43,16 @@ exercise_categories = {
 }
 
 # Create a mapping of exercise codes to their order in the curriculum
+# Max possible per exercise (for performance comparison)
+exercise_max = {
+    'M3S201a': 1, 'M3S201b': 1, 'M3S201c': 1, 'M3S201d': 1, 'M3S201e': 1,
+    'M3S201f': 1, 'M3S201g': 1, 'M3S201h': 1, 'M3S201i': 1, 'M3S201j': 1,
+    'M3S202': 3, 'M3S203': 3, 'M3S501': 5, 'M3S601': 3, 'M3S301': 3,
+    'M3S204': 4, 'M3S205': 4, 'M3S101': 2, 'M3S206': 3, 'M3S207': 4,
+    'M3S502': 3, 'M3S302': 2, 'M3S102': 4, 'M3S208': 3, 'M3S602': 1
+}
+
+# Create a mapping of exercise codes to their order in the curriculum
 exercise_order = {code: i+1 for i, code in enumerate(exercise_cols)}
 
 print("Processing student-exercise interactions...")
@@ -58,7 +69,7 @@ for _, row in df.iterrows():
             'category': exercise_categories.get(exer, 'Other'),
             'order': exercise_order[exer],
             'score': score,  # Store the raw score (0-5), with NaN treated as 0
-            'pass_status': 'Pass' if score >= 1 else 'Fail',  # Pass if score >= 1
+            'max': exercise_max.get(exer, np.nan),  # Max value for this exercise
             'grade': row['grade'],
             'sex': row['sex'],  # Add sex information
             'mean_perception': row.get('MEAN_PERCPT', None)  # Add mean perception score
@@ -67,25 +78,18 @@ for _, row in df.iterrows():
 # Convert to DataFrame
 kt_df = pd.DataFrame(kt_data)
 
-# Calculate additional metrics
-print("Calculating additional metrics...")
-# Time spent (placeholder - would need timestamp data for actual calculation)
-kt_df['time_spent'] = np.random.uniform(5, 60, size=len(kt_df))  # Random time between 5-60 seconds
-
-# Calculate cumulative metrics per student
-grouped = kt_df.groupby(['student_id', 'exercise_id'])
-kt_df['total_attempts'] = grouped.cumcount() + 1  # Counts attempts directly
-
-kt_df['pass_numeric'] = (kt_df['pass_status'] == 'Pass').astype(int)  # Convert pass/fail to 1/0 for calculations
-kt_df['cumulative_passes'] = kt_df.groupby('student_id')['pass_numeric'].cumsum()
-kt_df['pass_rate'] = kt_df['cumulative_passes'] / kt_df.groupby('student_id').cumcount().add(1)
-
-# Drop the temporary numeric column
-kt_df = kt_df.drop(columns=['pass_numeric'])
+ # No additional derived metrics added here. Kept only core fields and per-exercise max.
 
 # Save to CSV
 print(f"Saving preprocessed data to {output_file}...")
-kt_df.to_csv(output_file, index=False)
+try:
+    kt_df.to_csv(output_file, index=False)
+except PermissionError:
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    fallback = Path(f"preprocessed_kt_data_{ts}.csv")
+    print(f"Permission denied writing {output_file}. Saving to {fallback} instead. Close the CSV if open to overwrite default.")
+    kt_df.to_csv(fallback, index=False)
+    output_file = fallback
 
 print("\nPreprocessing complete!")
 print(f"Total interactions: {len(kt_df)}")
@@ -93,3 +97,4 @@ print(f"Unique students: {kt_df['student_id'].nunique()}")
 print(f"Unique exercises: {kt_df['exercise_id'].nunique()}")
 print("\nSample of preprocessed data:")
 print(kt_df.head())
+
