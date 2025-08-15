@@ -55,6 +55,17 @@ exercise_max = {
 # Create a mapping of exercise codes to their order in the curriculum
 exercise_order = {code: i+1 for i, code in enumerate(exercise_cols)}
 
+# Helpers
+def _standardize_sex(val):
+    if pd.isna(val):
+        return None
+    s = str(val).strip().lower()
+    if s in ("boy", "male", "m"):
+        return "Boy"
+    if s in ("girl", "gir", "female", "f"):
+        return "Girl"
+    return str(val).strip().capitalize()
+
 print("Processing student-exercise interactions...")
 # Melt the dataframe to long format (student-exercise interactions)
 kt_data = []
@@ -63,16 +74,49 @@ for _, row in df.iterrows():
     for exer in exercise_cols:
         # Treat NaN values as 0
         score = 0 if pd.isna(row[exer]) else int(row[exer])
+        max_val = exercise_max.get(exer, np.nan)
+        normalized_score = (score / max_val) if (pd.notna(max_val) and max_val > 0) else np.nan
+        sex_std = _standardize_sex(row.get('sex', None))
+        # language match feature
+        hl = row.get('home_lang', np.nan)
+        sl = row.get('school_lang', np.nan)
+        if pd.notna(hl) and pd.notna(sl):
+            home_school_lang_match = int(str(hl).strip().lower() == str(sl).strip().lower())
+        else:
+            home_school_lang_match = np.nan
         kt_data.append({
             'student_id': student_id,
             'exercise_id': exer,
             'category': exercise_categories.get(exer, 'Other'),
             'order': exercise_order[exer],
             'score': score,  # Store the raw score (0-5), with NaN treated as 0
-            'max': exercise_max.get(exer, np.nan),  # Max value for this exercise
+            'max': max_val,  # Max value for this exercise
+            'normalized_score': normalized_score,
+            'reward': normalized_score,
+            'flag_score_exceeds_max': int(score > max_val) if pd.notna(max_val) else 0,
             'grade': row['grade'],
-            'sex': row['sex'],  # Add sex information
-            'mean_perception': row.get('MEAN_PERCPT', None)  # Add mean perception score
+            'sex': sex_std,  # Standardized sex label
+            'mean_perception': row.get('MEAN_PERCPT', None),  # Add mean perception score
+            # Version / context
+            'ver_oplm': row.get('Ver_OPLM', None),
+            'ver_da': row.get('Ver_DA', None),
+            'digiarvi_version': row.get('digiarvi_version', None),
+            # Language context
+            'school_lang': row.get('school_lang', None),
+            'home_lang': row.get('home_lang', None),
+            'strong_lang': row.get('strong_lang', None),
+            'friend_lang': row.get('friend_lang', None),
+            'home_school_lang_match': home_school_lang_match,
+            # Missingness / engagement
+            'missing_all': row.get('missing_all', None),
+            'missing_beginning30': row.get('missing_beginning30', None),
+            'missing_last50': row.get('missing_last50', None),
+            # Aggregates / ability proxies (primarily for evaluation)
+            'pSUM': row.get('pSUM', None),
+            'SUM_Rally': row.get('SUM_Rally', None),
+            'SUM': row.get('SUM', None),
+            'STD_TOTAL_theta_25': row.get('STD_TOTAL_theta_25', None),
+            'T10_TOTAL_theta_25': row.get('T10_TOTAL_theta_25', None)
         })
 
 # Convert to DataFrame
