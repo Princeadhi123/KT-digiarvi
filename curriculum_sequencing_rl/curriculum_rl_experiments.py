@@ -2,7 +2,7 @@ import os
 import argparse
 from typing import List
 from env import CurriculumEnvV2
-from evaluation import eval_policy_category_accuracy
+from evaluation import eval_policy_category_accuracy, print_sample_rollouts
 from q_learning import train_q_learning, greedy_from_qtable
 from dqn import train_dqn, dqn_policy
 from a2c import train_a2c, a2c_policy_fn
@@ -80,6 +80,11 @@ def run_all_and_report(
     # Reporting
     include_chance: bool = True,
     metrics_csv: str = None,
+    # Demo printing controls
+    demo: bool = False,
+    demo_episodes: int = 1,
+    demo_steps: int = 12,
+    demo_mode: str = "test",
 ):
     # Seed control
     random.seed(seed)
@@ -94,6 +99,10 @@ def run_all_and_report(
 
     results = {}
 
+    def _maybe_demo(policy_fn, name: str):
+        if demo:
+            print_sample_rollouts(env, policy_fn, mode=demo_mode, episodes=demo_episodes, max_steps=demo_steps, model_name=name)
+
     # Chance baseline via uniform random policy
     def _random_policy_fn(env_ref):
         def _p(state, cur_cat: int) -> int:
@@ -101,8 +110,10 @@ def run_all_and_report(
         return _p
 
     if include_chance:
-        chance_acc, chance_reward = eval_policy_category_accuracy(env, _random_policy_fn(env), mode="test", episodes=eval_episodes)
+        chance_policy = _random_policy_fn(env)
+        chance_acc, chance_reward = eval_policy_category_accuracy(env, chance_policy, mode="test", episodes=eval_episodes)
         results["Chance"] = (chance_acc, chance_reward)
+        _maybe_demo(chance_policy, "Chance")
 
     if "ql" in models:
         ql = train_q_learning(
@@ -117,8 +128,10 @@ def run_all_and_report(
             select_best_on_val=ql_select_best_on_val,
             val_episodes=ql_val_episodes,
         )
-        ql_acc, ql_reward = eval_policy_category_accuracy(env, greedy_from_qtable(ql), mode="test", episodes=eval_episodes)
+        ql_policy = greedy_from_qtable(ql)
+        ql_acc, ql_reward = eval_policy_category_accuracy(env, ql_policy, mode="test", episodes=eval_episodes)
         results["Q-Learning"] = (ql_acc, ql_reward)
+        _maybe_demo(ql_policy, "Q-Learning")
 
     if "dqn" in models:
         dqn = train_dqn(
@@ -137,8 +150,10 @@ def run_all_and_report(
             select_best_on_val=dqn_select_best_on_val,
             val_episodes=dqn_val_episodes,
         )
-        dqn_acc, dqn_reward = eval_policy_category_accuracy(env, dqn_policy(dqn), mode="test", episodes=eval_episodes)
+        dqn_pol = dqn_policy(dqn)
+        dqn_acc, dqn_reward = eval_policy_category_accuracy(env, dqn_pol, mode="test", episodes=eval_episodes)
         results["DQN"] = (dqn_acc, dqn_reward)
+        _maybe_demo(dqn_pol, "DQN")
 
     if "a2c" in models:
         a2c_net = train_a2c(
@@ -151,8 +166,10 @@ def run_all_and_report(
             bc_weight=a2c_bc_weight,
             batch_episodes=a2c_batch_episodes,
         )
-        a2c_acc, a2c_reward = eval_policy_category_accuracy(env, a2c_policy_fn(a2c_net, device=str(next(a2c_net.parameters()).device)), mode="test", episodes=eval_episodes)
+        a2c_pol = a2c_policy_fn(a2c_net, device=str(next(a2c_net.parameters()).device))
+        a2c_acc, a2c_reward = eval_policy_category_accuracy(env, a2c_pol, mode="test", episodes=eval_episodes)
         results["A2C"] = (a2c_acc, a2c_reward)
+        _maybe_demo(a2c_pol, "A2C")
 
     if "a3c" in models:
         a3c_net = train_a3c(
@@ -166,8 +183,10 @@ def run_all_and_report(
             bc_weight=a3c_bc_weight,
             rollouts_per_update=a3c_rollouts,
         )
-        a3c_acc, a3c_reward = eval_policy_category_accuracy(env, a2c_policy_fn(a3c_net, device=str(next(a3c_net.parameters()).device)), mode="test", episodes=eval_episodes)
+        a3c_pol = a2c_policy_fn(a3c_net, device=str(next(a3c_net.parameters()).device))
+        a3c_acc, a3c_reward = eval_policy_category_accuracy(env, a3c_pol, mode="test", episodes=eval_episodes)
         results["A3C"] = (a3c_acc, a3c_reward)
+        _maybe_demo(a3c_pol, "A3C")
 
     if "ppo" in models:
         ppo_net = train_ppo(
@@ -183,8 +202,10 @@ def run_all_and_report(
             bc_warmup_epochs=ppo_bc_warmup,
             bc_weight=ppo_bc_weight,
         )
-        ppo_acc, ppo_reward = eval_policy_category_accuracy(env, a2c_policy_fn(ppo_net, device=str(next(ppo_net.parameters()).device)), mode="test", episodes=eval_episodes)
+        ppo_pol = a2c_policy_fn(ppo_net, device=str(next(ppo_net.parameters()).device))
+        ppo_acc, ppo_reward = eval_policy_category_accuracy(env, ppo_pol, mode="test", episodes=eval_episodes)
         results["PPO"] = (ppo_acc, ppo_reward)
+        _maybe_demo(ppo_pol, "PPO")
 
     print("\n=== Test Metrics (category accuracy, avg reward) ===")
     for name, (acc, rew) in results.items():
@@ -296,6 +317,11 @@ if __name__ == "__main__":
     parser.add_argument("--metrics_csv", type=str, default=None, help="Path to CSV file to append metrics")
     parser.add_argument("--no_chance", dest="include_chance", action="store_false", help="Disable chance baseline evaluation")
     parser.set_defaults(include_chance=True)
+    # Demo controls
+    parser.add_argument("--demo", action="store_true", help="Print sample step-by-step decisions for each trained model")
+    parser.add_argument("--demo_episodes", type=int, default=1, help="How many demo episodes to print per model")
+    parser.add_argument("--demo_steps", type=int, default=12, help="Max steps per demo episode")
+    parser.add_argument("--demo_mode", type=str, default="test", choices=["train","val","test"], help="Split to use for demos")
     # Q-Learning
     parser.add_argument("--ql_alpha", type=float, default=0.2)
     parser.add_argument("--ql_gamma", type=float, default=0.9)
@@ -362,6 +388,10 @@ if __name__ == "__main__":
         seed=args.seed,
         metrics_csv=args.metrics_csv,
         include_chance=args.include_chance,
+        demo=args.demo,
+        demo_episodes=args.demo_episodes,
+        demo_steps=args.demo_steps,
+        demo_mode=args.demo_mode,
         # QL
         ql_alpha=args.ql_alpha,
         ql_gamma=args.ql_gamma,
