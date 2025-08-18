@@ -65,8 +65,10 @@ class CurriculumEnvV2:
             raise ValueError(f"CSV missing required columns: {missing}")
 
         # Category encoding and action space
-        self.df["category"] = self.df["category"].fillna("Unknown")
-        self.categories: List[str] = sorted(self.df["category"].unique())
+        # Prefer coarse grouping if available to keep action space stable
+        self.category_col = "category_group" if "category_group" in self.df.columns else "category"
+        self.df[self.category_col] = self.df[self.category_col].fillna("Unknown")
+        self.categories: List[str] = sorted(self.df[self.category_col].unique())
         self.cat2id: Dict[str, int] = {c: i for i, c in enumerate(self.categories)}
         self.action_size = len(self.categories)
 
@@ -92,7 +94,7 @@ class CurriculumEnvV2:
             self.df[col] = pd.to_numeric(self.df[col], errors="coerce").fillna(0.0).astype(float)
 
         # One-hot category for state
-        self.df["category_id"] = self.df["category"].map(self.cat2id).astype(int)
+        self.df["category_id"] = self.df[self.category_col].map(self.cat2id).astype(int)
 
         # Build per-student ordered data
         self.df.sort_values(["student_id", "order"], inplace=True)

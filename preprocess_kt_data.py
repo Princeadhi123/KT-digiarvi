@@ -17,6 +17,35 @@ print(f"Found {len(exercise_cols)} exercise columns")
 
 # Create a mapping of exercise codes to their categories
 exercise_categories = {
+    'M3S201a': 'Rally1 2x3',
+    'M3S201b': 'Rally2 5x4',
+    'M3S201c': 'Rally3 10x8',
+    'M3S201d': 'Rally4 9x3',
+    'M3S201e': 'Rally5 3x7',
+    'M3S201f': 'Rally6 4x4',
+    'M3S201g': 'Rally7 4x6',
+    'M3S201h': 'Rally8 6x7',
+    'M3S201i': 'Rally9 7x4',
+    'M3S201j': 'Rally10 8x6',
+    'M3S202': 'Subtractions 1',
+    'M3S203': 'Divisions 1',
+    'M3S501': 'Geometry: Basic concepts',
+    'M3S601': 'Rain statistics (daily rainfall amounts)',
+    'M3S301': 'Missing number: Subtraction',
+    'M3S204': 'Additions 2',
+    'M3S205': 'Subtractions 2',
+    'M3S101': 'Word puzzle – bars',
+    'M3S206': 'Subtractions 3',
+    'M3S207': 'Multiplications 2',
+    'M3S502': 'Distance on a map',
+    'M3S302': 'Missing number: Division',
+    'M3S102': 'Logical reasoning',
+    'M3S208': 'Divisions 3',
+    'M3S602': 'Fix the robot’s code',
+}
+
+# Coarse (group-level) categories for RL action space
+exercise_categories_coarse = {
     # Multiplication
     'M3S201a': 'Multiplication', 'M3S201b': 'Multiplication', 'M3S201c': 'Multiplication',
     'M3S201d': 'Multiplication', 'M3S201e': 'Multiplication', 'M3S201f': 'Multiplication',
@@ -87,7 +116,10 @@ for _, row in df.iterrows():
         kt_data.append({
             'student_id': student_id,
             'exercise_id': exer,
+            # Descriptive label for category
             'category': exercise_categories.get(exer, 'Other'),
+            # Coarse grouping used by RL
+            'category_group': exercise_categories_coarse.get(exer, 'Other'),
             'order': exercise_order[exer],
             'score': score,  # Store the raw score (0-5), with NaN treated as 0
             'max': max_val,  # Max value for this exercise
