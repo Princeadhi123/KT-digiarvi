@@ -45,13 +45,44 @@ def print_sample_rollouts(env, policy_fn, mode: str = "test", episodes: int = 1,
             cur_cat = int(_np.argmax(state[: env.action_size]))
             action = policy_fn(state, cur_cat)
             next_state, reward, done, info = env.step(action)
-            target = int(info.get('target', -1))
-            corr = int(info.get('correct', 0))
-            correct += corr
             rewards.append(float(reward))
-            print(f"  step={steps+1:02d} cur={_cat_name(cur_cat)} -> action={_cat_name(action)} target={_cat_name(target)} correct={corr} reward={reward:.3f}")
+            if 'target' in info or 'correct' in info:
+                target = int(info.get('target', -1))
+                corr = int(info.get('correct', 0))
+                correct += corr
+                print(f"  step={steps+1:02d} cur={_cat_name(cur_cat)} -> suggested={_cat_name(action)} target={_cat_name(target)} correct={corr} reward={reward:.3f}")
+            else:
+                # Interactive env path: show valid_action instead
+                va = info.get('valid_action', None)
+                va_txt = f" valid={int(va)}" if va is not None else ""
+                # Try to show remaining actionable types if available
+                rem_txt = ""
+                try:
+                    rem = len(getattr(env, 'valid_action_ids')())
+                    rem_txt = f" remaining_action_types={rem}"
+                except Exception:
+                    pass
+                print(f"  step={steps+1:02d} cur={_cat_name(cur_cat)} -> suggested={_cat_name(action)}{va_txt}{rem_txt} reward={reward:.3f}")
             state = next_state if not done else state
             steps += 1
         ep_acc = (correct / steps) if steps > 0 else 0.0
         ep_avg_r = float(_np.mean(rewards)) if rewards else 0.0
         print(f"  summary: steps={steps}, acc={ep_acc:.3f}, avg_reward={ep_avg_r:.3f}")
+
+
+def eval_policy_avg_score(env, policy_fn, mode: str = "test", episodes: int = 200) -> float:
+    """Evaluate a policy by averaging per-step rewards (e.g., normalized_score) across episodes.
+
+    Returns avg_reward (float).
+    """
+    rewards = []
+    for _ in range(episodes):
+        state = env.reset(mode)
+        done = False
+        while not done:
+            cur_cat = int(np.argmax(state[: env.action_size]))
+            action = policy_fn(state, cur_cat)
+            next_state, reward, done, info = env.step(action)
+            rewards.append(float(reward))
+            state = next_state if not done else state
+    return float(np.mean(rewards)) if rewards else 0.0
