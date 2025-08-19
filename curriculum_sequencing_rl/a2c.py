@@ -3,8 +3,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
+from typing import Any, Callable, Optional, Tuple
+
 
 class ActorCritic(nn.Module):
+    """Shared MLP policy-value network used by A2C/A3C/PPO."""
     def __init__(self, state_dim: int, n_actions: int):
         super().__init__()
         self.body = nn.Sequential(
@@ -14,14 +17,14 @@ class ActorCritic(nn.Module):
         self.pi = nn.Linear(128, n_actions)
         self.v = nn.Linear(128, 1)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         z = self.body(x)
         logits = self.pi(z)
         value = self.v(z)
         return logits, value
 
 
-def _bc_pretrain_policy(net: ActorCritic, env, epochs: int, lr: float, device: str):
+def _bc_pretrain_policy(net: ActorCritic, env: Any, epochs: int, lr: float, device: str) -> None:
     """Behavior cloning warmup: supervised next-category prediction from dataset transitions."""
     opt = optim.Adam(net.parameters(), lr=lr)
     net.train()
@@ -57,17 +60,34 @@ def _bc_pretrain_policy(net: ActorCritic, env, epochs: int, lr: float, device: s
 
 
 def train_a2c(
-    env,
+    env: Any,
     episodes: int = 50,
     gamma: float = 0.99,
     lr: float = 1e-3,
-    device: str = None,
+    device: Optional[str] = None,
     entropy_coef: float = 0.01,
     value_coef: float = 0.5,
     bc_warmup_epochs: int = 1,
     bc_weight: float = 0.5,
     batch_episodes: int = 4,
 ) -> ActorCritic:
+    """Train an Advantage Actor-Critic agent on the interactive curriculum env.
+
+    Args:
+        env: Environment exposing `state_dim`, `action_size`, `reset(mode)`, and `step(action)`.
+        episodes: Total training episodes.
+        gamma: Discount factor.
+        lr: Optimizer learning rate.
+        device: Torch device string, defaults to CUDA if available else CPU.
+        entropy_coef: Entropy regularization weight.
+        value_coef: Value loss weight.
+        bc_warmup_epochs: Offline behavior cloning warm start epochs (supervised).
+        bc_weight: Weight for auxiliary CE loss; disabled online when env is interactive.
+        batch_episodes: Episodes per policy update.
+
+    Returns:
+        Trained `ActorCritic` network.
+    """
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     net = ActorCritic(env.state_dim, env.action_size).to(device)
 
@@ -158,10 +178,12 @@ def train_a2c(
     return net
 
 
-def a2c_policy_fn(net: ActorCritic, device: str):
+def a2c_policy_fn(net: ActorCritic, device: str) -> Callable[[Any, int], int]:
+    """Return a greedy policy function using the trained A2C network."""
     def _policy(state, cur_cat: int) -> int:
         with torch.no_grad():
             st = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0)
             logits, _ = net(st)
             return int(torch.argmax(logits, dim=-1).item())
     return _policy
+

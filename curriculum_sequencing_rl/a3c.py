@@ -1,24 +1,41 @@
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
-
+from typing import Any, Optional
 from a2c import ActorCritic, _bc_pretrain_policy
 
 
 def train_a3c(
-    env,
+    env: Any,
     episodes: int = 50,
     rollouts_per_update: int = 4,
     gamma: float = 0.99,
     lr: float = 1e-3,
-    device: str = None,
+    device: Optional[str] = None,
     entropy_coef: float = 0.01,
     value_coef: float = 0.5,
     gae_lambda: float = 0.95,
     bc_warmup_epochs: int = 1,
     bc_weight: float = 0.5,
 ) -> ActorCritic:
-    """Improved A3C with GAE, entropy regularization, and auxiliary behavior cloning."""
+    """Train an Asynchronous Advantage Actor-Critic agent on the interactive curriculum env.
+
+    Args:
+        env: Environment exposing `state_dim`, `action_size`, `reset(mode)`, and `step(action)`.
+        episodes: Total training episodes.
+        rollouts_per_update: Number of rollouts collected per optimization step.
+        gamma: Discount factor.
+        lr: Optimizer learning rate.
+        device: Torch device string, defaults to CUDA if available else CPU.
+        entropy_coef: Entropy regularization weight.
+        value_coef: Value loss weight.
+        gae_lambda: GAE lambda for advantage estimation.
+        bc_warmup_epochs: Offline behavior cloning warm start epochs (supervised).
+        bc_weight: Weight for auxiliary CE loss; disabled online when env is interactive.
+
+    Returns:
+        Trained `ActorCritic` network.
+    """
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     net = ActorCritic(env.state_dim, env.action_size).to(device)
 

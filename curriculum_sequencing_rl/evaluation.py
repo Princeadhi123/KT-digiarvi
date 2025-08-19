@@ -1,10 +1,17 @@
-from typing import Tuple
+from typing import Any, Callable, Optional, Tuple
 import numpy as np
 
 
-def print_sample_rollouts(env, policy_fn, mode: str = "test", episodes: int = 1, max_steps: int = 15, model_name: str = None):
-    """Print small, human-readable episode traces:
-    shows current category, chosen action, optional target (if provided by env), and reward.
+def print_sample_rollouts(env: Any, policy_fn: Callable[[Any, int], int], mode: str = "test", episodes: int = 1, max_steps: int = 15, model_name: Optional[str] = None) -> None:
+    """Print small, human-readable episode traces.
+
+    Args:
+        env: Environment exposing `reset(mode)`, `step(action)`, `categories`, and `action_size`.
+        policy_fn: Callable(state, cur_cat) -> action.
+        mode: Split to evaluate: 'train' | 'val' | 'test'.
+        episodes: Number of episodes to print.
+        max_steps: Max steps per episode.
+        model_name: Optional label prefix for prints.
     """
     import numpy as _np
     name = f"[{model_name}] " if model_name else ""
@@ -45,7 +52,7 @@ def print_sample_rollouts(env, policy_fn, mode: str = "test", episodes: int = 1,
         print(f"  summary: steps={steps}, avg_reward={ep_avg_r:.3f}")
 
 
-def eval_policy_avg_score(env, policy_fn, mode: str = "test", episodes: int = 200) -> float:
+def eval_policy_avg_score(env: Any, policy_fn: Callable[[Any, int], int], mode: str = "test", episodes: int = 200) -> float:
     """Evaluate a policy by averaging per-step rewards (e.g., normalized_score) across episodes.
 
     Returns avg_reward (float).
@@ -67,7 +74,7 @@ def eval_policy_avg_score(env, policy_fn, mode: str = "test", episodes: int = 20
 # Interactive diagnostics
 # -----------------------------
 
-def _best_remaining_immediate_reward(env) -> float:
+def _best_remaining_immediate_reward(env: Any) -> float:
     """Return the best immediate reward available from current interactive state.
 
     Assumes InteractiveReorderEnv internals. Returns NaN if not available.
@@ -93,7 +100,8 @@ def _best_remaining_immediate_reward(env) -> float:
         return float("nan")
 
 
-def _run_interactive_diagnostics(env, policy_fn, mode: str, episodes: int):
+def _run_interactive_diagnostics(env: Any, policy_fn: Callable[[Any, int], int], mode: str, episodes: int) -> Tuple[float, float, float, float]:
+    """Internal helper computing VPR, regret, regret_ratio, avg_reward."""
     total_steps = 0
     vpr_hits = 0.0
     regret_sum = 0.0
@@ -128,7 +136,7 @@ def _run_interactive_diagnostics(env, policy_fn, mode: str, episodes: int):
     return vpr, avg_regret, avg_regret_ratio, avg_reward
 
 
-def eval_policy_valid_pick_rate(env, policy_fn, mode: str = "test", episodes: int = 200) -> float:
+def eval_policy_valid_pick_rate(env: Any, policy_fn: Callable[[Any, int], int], mode: str = "test", episodes: int = 200) -> float:
     """Fraction of steps where the chosen action was valid (Interactive env only).
 
     Returns NaN if environment doesn't provide valid_action info.
@@ -137,7 +145,7 @@ def eval_policy_valid_pick_rate(env, policy_fn, mode: str = "test", episodes: in
     return float(vpr)
 
 
-def eval_policy_regret(env, policy_fn, mode: str = "test", episodes: int = 200) -> Tuple[float, float]:
+def eval_policy_regret(env: Any, policy_fn: Callable[[Any, int], int], mode: str = "test", episodes: int = 200) -> Tuple[float, float]:
     """Compute average instantaneous regret and regret ratio for interactive env.
 
     - avg_regret: E[max_best_possible_reward - obtained_reward]

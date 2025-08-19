@@ -27,8 +27,8 @@ def run_all_and_report(
     ppo_episodes: int = 50,
     eval_episodes: int = 300,
     models: List[str] = None,
-    reward_correct_w: float = 0.5,
-    reward_score_w: float = 0.5,
+    reward_correct_w: float = 0.0,
+    reward_score_w: float = 1.0,
     # Reproducibility
     seed: int = 42,
     # Q-Learning params
@@ -37,7 +37,7 @@ def run_all_and_report(
     ql_eps_start: float = 0.3,
     ql_eps_end: float = 0.0,
     ql_eps_decay_epochs: int = 3,
-    ql_select_best_on_val: bool = True,
+    ql_select_best_on_val: bool = False,
     ql_val_episodes: int = 300,
     # DQN params
     dqn_lr: float = 1e-3,
@@ -50,7 +50,7 @@ def run_all_and_report(
     dqn_eps_decay_steps: int = 20000,
     dqn_target_tau: float = 0.01,
     dqn_target_update_interval: int = 1,
-    dqn_select_best_on_val: bool = True,
+    dqn_select_best_on_val: bool = False,
     dqn_val_episodes: int = 300,
     # A2C params
     a2c_lr: float = 1e-3,
@@ -372,8 +372,8 @@ if __name__ == "__main__":
     parser.add_argument("--a3c_episodes", type=int, default=50)
     parser.add_argument("--ppo_episodes", type=int, default=50)
     parser.add_argument("--eval_episodes", type=int, default=300)
-    parser.add_argument("--reward_correct_w", type=float, default=0.5, help="Weight for correctness in reward")
-    parser.add_argument("--reward_score_w", type=float, default=0.5, help="Weight for next score in reward")
+    parser.add_argument("--reward_correct_w", type=float, default=0.0, help="Correctness weight (interactive env ignores correctness in step; offline learners may use)")
+    parser.add_argument("--reward_score_w", type=float, default=1.0, help="Score weight (interactive env uses score-only reward by design)")
     parser.add_argument("--models", type=str, default="ql,dqn,a2c,a3c,ppo", help="Comma-separated models to run")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--metrics_csv", type=str, default=None, help="Path to CSV file to append reward/diagnostics metrics")
@@ -395,8 +395,10 @@ if __name__ == "__main__":
     parser.add_argument("--ql_eps_end", type=float, default=0.0)
     parser.add_argument("--ql_eps_decay_epochs", type=int, default=3)
     parser.add_argument("--ql_val_episodes", type=int, default=300)
-    parser.add_argument("--no_ql_select_best", dest="ql_select_best_on_val", action="store_false", help="Disable validation-based selection for Q-Learning")
-    parser.set_defaults(ql_select_best_on_val=True)
+    # Default-disabled for interactive env; enable with --ql_select_best
+    parser.add_argument("--ql_select_best", dest="ql_select_best_on_val", action="store_true", help="Enable validation-based selection for Q-Learning (disabled by default; not meaningful in interactive env)")
+    parser.add_argument("--no_ql_select_best", dest="ql_select_best_on_val", action="store_false", help="Disable validation-based selection for Q-Learning (default)")
+    parser.set_defaults(ql_select_best_on_val=False)
     # DQN
     parser.add_argument("--dqn_lr", type=float, default=1e-3)
     parser.add_argument("--dqn_gamma", type=float, default=0.99)
@@ -409,8 +411,10 @@ if __name__ == "__main__":
     parser.add_argument("--dqn_target_tau", type=float, default=0.01)
     parser.add_argument("--dqn_target_update_interval", type=int, default=1)
     parser.add_argument("--dqn_val_episodes", type=int, default=300)
-    parser.add_argument("--no_dqn_select_best", dest="dqn_select_best_on_val", action="store_false", help="Disable validation-based selection for DQN")
-    parser.set_defaults(dqn_select_best_on_val=True)
+    # Default-disabled for interactive env; enable with --dqn_select_best
+    parser.add_argument("--dqn_select_best", dest="dqn_select_best_on_val", action="store_true", help="Enable validation-based selection for DQN (disabled by default; not meaningful in interactive env)")
+    parser.add_argument("--no_dqn_select_best", dest="dqn_select_best_on_val", action="store_false", help="Disable validation-based selection for DQN (default)")
+    parser.set_defaults(dqn_select_best_on_val=False)
     # A2C
     parser.add_argument("--a2c_lr", type=float, default=1e-3)
     parser.add_argument("--a2c_entropy", type=float, default=0.01)
@@ -439,9 +443,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     # Notes for interactive runs (always interactive)
     if args.dqn_select_best_on_val:
-        print("[note] Interactive env: validation-based model selection is not meaningful; pass --no_dqn_select_best to disable.")
+        print("[note] Interactive env: validation-based model selection is not meaningful; it's disabled by default. You enabled it explicitly (--dqn_select_best).")
     if args.ql_select_best_on_val:
-        print("[note] Interactive env: validation-based model selection is not meaningful; pass --no_ql_select_best to disable.")
+        print("[note] Interactive env: validation-based model selection is not meaningful; it's disabled by default. You enabled it explicitly (--ql_select_best).")
 
     model_list = [m.strip().lower() for m in args.models.split(',') if m.strip()]
     print(f"Using data: {args.data}")

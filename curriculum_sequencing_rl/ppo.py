@@ -2,31 +2,18 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from typing import Any, Optional
 
-from a2c import _bc_pretrain_policy
-
-class PPOActorCritic(nn.Module):
-    def __init__(self, state_dim: int, n_actions: int):
-        super().__init__()
-        self.body = nn.Sequential(
-            nn.Linear(state_dim, 128), nn.ReLU(),
-            nn.Linear(128, 128), nn.ReLU(),
-        )
-        self.pi = nn.Linear(128, n_actions)
-        self.v = nn.Linear(128, 1)
-
-    def forward(self, x):
-        z = self.body(x)
-        return self.pi(z), self.v(z)
+from a2c import ActorCritic, _bc_pretrain_policy
 
 
 def train_ppo(
-    env,
+    env: Any,
     episodes: int = 50,
     gamma: float = 0.99,
     clip_eps: float = 0.2,
     lr: float = 3e-4,
-    device: str = None,
+    device: Optional[str] = None,
     ppo_epochs: int = 4,
     batch_episodes: int = 8,
     minibatch_size: int = 2048,
@@ -35,9 +22,35 @@ def train_ppo(
     gae_lambda: float = 0.95,
     bc_warmup_epochs: int = 2,
     bc_weight: float = 1.0,
-) -> PPOActorCritic:
+) -> ActorCritic:
+    """Train a PPO agent on the interactive environment.
+
+    Args:
+        env: Environment exposing `state_dim`, `action_size`, `reset(mode)`, and `step(action)`.
+        episodes: Total PPO episodes to collect and optimize over.
+        gamma: Discount factor.
+        clip_eps: PPO ratio clipping parameter.
+        lr: Optimizer learning rate.
+        device: Torch device string; defaults to CUDA if available, else CPU.
+        ppo_epochs: Number of passes over each collected batch.
+        batch_episodes: Episodes per on-policy collection before optimization.
+        minibatch_size: SGD minibatch size for PPO updates.
+        entropy_coef: Entropy regularization coefficient.
+        value_coef: Value function loss coefficient.
+        gae_lambda: GAE lambda for advantage estimates.
+        bc_warmup_epochs: Optional behavior cloning warm-start epochs over dataset transitions.
+        bc_weight: Weight for CE loss against supervised targets during PPO updates.
+
+    Returns:
+        Trained `ActorCritic` policy network.
+
+    Notes:
+    - Uses the shared `ActorCritic` network from `a2c.py` to avoid duplication.
+    - Online behavior cloning CE is disabled when the env exposes `valid_action_ids` (interactive).
+    - Old log-probs and value tensors collected during rollout are detached to avoid double-backward.
+    """
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    net = PPOActorCritic(env.state_dim, env.action_size).to(device)
+    net = ActorCritic(env.state_dim, env.action_size).to(device)
 
     # Optional behavior cloning warm start using dataset transitions
     if bc_warmup_epochs > 0:

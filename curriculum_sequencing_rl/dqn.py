@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from typing import Any, Callable, Optional
 from evaluation import eval_policy_avg_score
 
 
@@ -20,7 +21,7 @@ class DuelingQNet(nn.Module):
         self.adv = nn.Linear(hidden_dim, n_actions)
         self.val = nn.Linear(hidden_dim, 1)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         z = self.feature(x)
         adv = self.adv(z)
         val = self.val(z)
@@ -52,12 +53,13 @@ class DQNAgent:
         self.target_tau = float(target_tau)
         self.target_update_interval = int(target_update_interval)
 
-    def _epsilon(self):
+    def _epsilon(self) -> float:
         t = min(self.steps_done, self.eps_decay_steps)
         frac = 1.0 - (t / max(1, self.eps_decay_steps))
         return self.eps_end + (self.eps_start - self.eps_end) * frac
 
     def act(self, state: np.ndarray, training: bool = True) -> int:
+        """Epsilon-greedy action selection; greedy when training=False."""
         eps = self._epsilon()
         if training and random.random() < eps:
             return random.randrange(self.n_actions)
@@ -66,7 +68,8 @@ class DQNAgent:
             qv = self.q(s)
             return int(torch.argmax(qv, dim=1).item())
 
-    def remember(self, s, a, r, ns, d):
+    def remember(self, s: np.ndarray, a: int, r: float, ns: Optional[np.ndarray], d: bool) -> None:
+        """Append a transition to the replay buffer."""
         self.buf.append((s, a, r, ns, d))
 
     def _soft_update_target(self):
@@ -74,7 +77,8 @@ class DQNAgent:
             for tgt, src in zip(self.q_tgt.parameters(), self.q.parameters()):
                 tgt.data.copy_((1.0 - self.target_tau) * tgt.data + self.target_tau * src.data)
 
-    def replay(self):
+    def replay(self) -> float:
+        """Sample a minibatch and perform one gradient step. Returns loss or 0.0 if buffer too small."""
         if len(self.buf) < self.batch_size:
             return 0.0
         batch = random.sample(self.buf, self.batch_size)
@@ -105,15 +109,30 @@ class DQNAgent:
             self._soft_update_target()
         return float(loss.item())
 
-    def update_target(self):
+    def update_target(self) -> None:
         self.q_tgt.load_state_dict(self.q.state_dict())
 
 
-def train_dqn(env, episodes: int = 50, device: str = None,
+def train_dqn(env: Any, episodes: int = 50, device: Optional[str] = None,
               eps_start: float = 1.0, eps_end: float = 0.05, eps_decay_steps: int = 20000,
               target_tau: float = 0.01, target_update_interval: int = 1,
               lr: float = 1e-3, gamma: float = 0.99, batch_size: int = 128, buffer_size: int = 20000,
               hidden_dim: int = 128, select_best_on_val: bool = True, val_episodes: int = 300) -> DQNAgent:
+        """Train a Dueling Double DQN agent on the interactive environment.
+
+        Args:
+            env: Environment exposing `state_dim`, `action_size`, `reset(mode)`, and `step(action)`.
+            episodes: Training episodes.
+            device: Torch device string, defaults to CUDA if available else CPU.
+            eps_start/eps_end/eps_decay_steps: Epsilon-greedy schedule.
+            target_tau/target_update_interval: Soft target update settings.
+            lr/gamma/batch_size/buffer_size/hidden_dim: DQN hyperparameters.
+            select_best_on_val: If True, pick best model by validation avg score.
+            val_episodes: Validation episodes when selecting best.
+
+        Returns:
+            Trained `DQNAgent`.
+        """
         device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         agent = DQNAgent(env.state_dim, env.action_size, device=device,
                          eps_start=eps_start, eps_end=eps_end, eps_decay_steps=eps_decay_steps,
@@ -148,7 +167,8 @@ def train_dqn(env, episodes: int = 50, device: str = None,
         return agent
 
 
-def dqn_policy(agent: DQNAgent):
+def dqn_policy(agent: DQNAgent) -> Callable[[Any, int], int]:
+    """Return a greedy policy function using the trained DQN agent."""
     def _policy(state, cur_cat: int) -> int:
         return agent.act(state, training=False)
     return _policy
