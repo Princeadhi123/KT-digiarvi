@@ -1,8 +1,8 @@
 import numpy as np
 from collections import defaultdict
+from typing import Any
 
-from env import CurriculumEnvV2
-from evaluation import eval_policy_category_accuracy
+from evaluation import eval_policy_avg_score
 
 
 class QLearningBaseline:
@@ -26,7 +26,7 @@ class QLearningBaseline:
 
 
 def train_q_learning(
-    env: CurriculumEnvV2,
+    env: Any,
     epochs: int = 5,
     alpha: float = 0.2,
     gamma: float = 0.9,
@@ -38,7 +38,7 @@ def train_q_learning(
     val_episodes: int = 300,
 ) -> QLearningBaseline:
     agent = QLearningBaseline(env.action_size, env.action_size, alpha=alpha, gamma=gamma, epsilon=eps_start, seed=seed)
-    best_acc = -1.0
+    best_metric = -1e18
     best_Q = None
     # Iterate over train students epochs
     for ep in range(epochs):
@@ -57,9 +57,9 @@ def train_q_learning(
                 r = env.rw_correct * corr + env.rw_score * float(next_row.get("normalized_score", 0.0))
                 agent.update(cur_cat, a, r, next_cat)
         if select_best_on_val:
-            val_acc, _ = eval_policy_category_accuracy(env, greedy_from_qtable(agent), mode="val", episodes=val_episodes)
-            if val_acc > best_acc:
-                best_acc = val_acc
+            val_avg = eval_policy_avg_score(env, greedy_from_qtable(agent), mode="val", episodes=val_episodes)
+            if val_avg > best_metric:
+                best_metric = val_avg
                 best_Q = agent.Q.copy()
     if select_best_on_val and best_Q is not None:
         agent.Q = best_Q

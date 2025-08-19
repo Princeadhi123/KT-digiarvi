@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from evaluation import eval_policy_category_accuracy
+from evaluation import eval_policy_avg_score
 
 
 class DuelingQNet(nn.Module):
@@ -120,7 +120,7 @@ def train_dqn(env, episodes: int = 50, device: str = None,
                          target_tau=target_tau, target_update_interval=target_update_interval,
                          lr=lr, gamma=gamma, batch_size=batch_size, buffer_size=buffer_size,
                          hidden_dim=hidden_dim)
-        best_acc = -1.0
+        best_metric = -1e18
         best_state = None
         for ep in range(episodes):
             s = env.reset("train")
@@ -138,9 +138,9 @@ def train_dqn(env, episodes: int = 50, device: str = None,
                 agent.q_tgt.load_state_dict(agent.q.state_dict())
             # Validation selection
             if select_best_on_val and ((ep + 1) % 5 == 0 or ep == episodes - 1):
-                val_acc, _ = eval_policy_category_accuracy(env, dqn_policy(agent), mode="val", episodes=val_episodes)
-                if val_acc > best_acc:
-                    best_acc = val_acc
+                val_avg = eval_policy_avg_score(env, dqn_policy(agent), mode="val", episodes=val_episodes)
+                if val_avg > best_metric:
+                    best_metric = val_avg
                     best_state = copy.deepcopy(agent.q.state_dict())
         if select_best_on_val and best_state is not None:
             agent.q.load_state_dict(best_state)

@@ -144,8 +144,11 @@ def train_a2c(
         # Approximate by (adv + values.detach()) target
         returns_est = adv_cat.detach() + values_cat.detach()
         value_loss = F.mse_loss(v_cat.squeeze(-1), returns_est)
-        # Auxiliary behavior cloning loss
-        ce_loss = F.cross_entropy(logits_cat, targets_cat)
+        # Auxiliary behavior cloning loss: disable online BC for interactive env (no supervised targets)
+        if hasattr(env, "valid_action_ids"):
+            ce_loss = torch.tensor(0.0, device=device)
+        else:
+            ce_loss = F.cross_entropy(logits_cat, targets_cat)
 
         loss = policy_loss + value_coef * value_loss - entropy_coef * entropy + bc_weight * ce_loss
         opt.zero_grad()

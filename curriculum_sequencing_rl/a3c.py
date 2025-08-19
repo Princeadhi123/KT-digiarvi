@@ -93,7 +93,11 @@ def train_a3c(
         entropy = dist_cat.entropy().mean()
         policy_loss = -(logps_cat * adv_cat).mean()
         value_loss = F.mse_loss(v_cat.squeeze(-1), returns_cat)
-        ce_loss = F.cross_entropy(logits_cat, targets_cat)
+        # Disable online BC for interactive env (no supervised targets)
+        if hasattr(env, "valid_action_ids"):
+            ce_loss = torch.tensor(0.0, device=device)
+        else:
+            ce_loss = F.cross_entropy(logits_cat, targets_cat)
 
         loss = policy_loss + value_coef * value_loss - entropy_coef * entropy + bc_weight * ce_loss
         opt.zero_grad()

@@ -130,7 +130,11 @@ def train_ppo(
                 policy_obj = torch.min(surr1, surr2).mean()
                 vf_loss = F.mse_loss(v.squeeze(-1), mb_returns)
                 entropy = dist.entropy().mean()
-                ce_loss = F.cross_entropy(logits, mb_targets)
+                # Disable online BC for interactive env (no supervised targets)
+                if hasattr(env, "valid_action_ids"):
+                    ce_loss = torch.tensor(0.0, device=device)
+                else:
+                    ce_loss = F.cross_entropy(logits, mb_targets)
                 loss = -(policy_obj) + value_coef * vf_loss - entropy_coef * entropy + bc_weight * ce_loss
 
                 opt.zero_grad()

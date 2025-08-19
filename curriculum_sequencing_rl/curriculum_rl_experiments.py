@@ -1,8 +1,8 @@
 import os
 import argparse
 from typing import List
-from env import CurriculumEnvV2, InteractiveReorderEnv
-from evaluation import eval_policy_category_accuracy, eval_policy_avg_score, print_sample_rollouts
+from env import InteractiveReorderEnv
+from evaluation import eval_policy_avg_score, eval_policy_valid_pick_rate, eval_policy_regret, print_sample_rollouts
 from q_learning import train_q_learning, greedy_from_qtable
 from dqn import train_dqn, dqn_policy
 from a2c import train_a2c, a2c_policy_fn
@@ -29,7 +29,6 @@ def run_all_and_report(
     models: List[str] = None,
     reward_correct_w: float = 0.5,
     reward_score_w: float = 0.5,
-    env_type: str = "passive",  # 'passive' (CurriculumEnvV2) or 'interactive' (InteractiveReorderEnv)
     # Reproducibility
     seed: int = 42,
     # Q-Learning params
@@ -96,11 +95,8 @@ def run_all_and_report(
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
-    # Create environment
-    if env_type == "interactive":
-        env = InteractiveReorderEnv(data_path, reward_correct_w=reward_correct_w, reward_score_w=reward_score_w, seed=seed)
-    else:
-        env = CurriculumEnvV2(data_path, reward_correct_w=reward_correct_w, reward_score_w=reward_score_w, seed=seed)
+    # Create environment (interactive-only)
+    env = InteractiveReorderEnv(data_path, reward_correct_w=reward_correct_w, reward_score_w=reward_score_w, seed=seed)
     if models is None:
         models = ["ql", "dqn", "a2c", "a3c", "ppo"]
 
@@ -117,25 +113,28 @@ def run_all_and_report(
         return _p
 
     def _evaluate(policy_fn):
-        if env_type == "interactive":
-            avg = eval_policy_avg_score(env, policy_fn, mode="test", episodes=eval_episodes)
-            return float("nan"), float(avg)
-        else:
-            acc, rew = eval_policy_category_accuracy(env, policy_fn, mode="test", episodes=eval_episodes)
-            return float(acc), float(rew)
+        avg = eval_policy_avg_score(env, policy_fn, mode="test", episodes=eval_episodes)
+        vpr = eval_policy_valid_pick_rate(env, policy_fn, mode="test", episodes=eval_episodes)
+        regret, regret_ratio = eval_policy_regret(env, policy_fn, mode="test", episodes=eval_episodes)
+        return {
+            "reward": float(avg),
+            "vpr": float(vpr),
+            "regret": float(regret),
+            "regret_ratio": float(regret_ratio),
+        }
 
     if include_chance:
         chance_policy = _random_policy_fn(env)
-        chance_acc, chance_reward = _evaluate(chance_policy)
-        results["Chance"] = {"acc": chance_acc, "reward": chance_reward}
+        ch = _evaluate(chance_policy)
+        results["Chance"] = ch
         _maybe_demo(chance_policy, "Chance")
 
     # Trivial baseline: always predict the current category
     if include_trivial:
         def _trivial_policy(state, cur_cat: int) -> int:
             return int(cur_cat)
-        trivial_acc, trivial_reward = _evaluate(_trivial_policy)
-        results["TrivialSame"] = {"acc": trivial_acc, "reward": trivial_reward}
+        tr = _evaluate(_trivial_policy)
+        results["TrivialSame"] = tr
         _maybe_demo(_trivial_policy, "TrivialSame")
 
     # Markov-1 baseline learned from training transitions
@@ -151,8 +150,8 @@ def run_all_and_report(
         def _markov_policy(state, cur_cat: int) -> int:
             # If we never saw this cur_cat in train, fallback to cur_cat
             return int(most_next[cur_cat]) if counts[cur_cat].sum() > 0 else int(cur_cat)
-        mk_acc, mk_reward = _evaluate(_markov_policy)
-        results["Markov1-Train"] = {"acc": mk_acc, "reward": mk_reward}
+        mk = _evaluate(_markov_policy)
+        results["Markov1-Train"] = mk
         _maybe_demo(_markov_policy, "Markov1-Train")
 
     if "ql" in models:
@@ -169,8 +168,8 @@ def run_all_and_report(
             val_episodes=ql_val_episodes,
         )
         ql_policy = greedy_from_qtable(ql)
-        ql_acc, ql_reward = _evaluate(ql_policy)
-        results["Q-Learning"] = {"acc": ql_acc, "reward": ql_reward}
+        ql_m = _evaluate(ql_policy)
+        results["Q-Learning"] = ql_m
         _maybe_demo(ql_policy, "Q-Learning")
 
     if "dqn" in models:
@@ -191,8 +190,8 @@ def run_all_and_report(
             val_episodes=dqn_val_episodes,
         )
         dqn_pol = dqn_policy(dqn)
-        dqn_acc, dqn_reward = _evaluate(dqn_pol)
-        results["DQN"] = {"acc": dqn_acc, "reward": dqn_reward}
+        dqn_m = _evaluate(dqn_pol)
+        results["DQN"] = dqn_m
         _maybe_demo(dqn_pol, "DQN")
 
     if "a2c" in models:
@@ -207,8 +206,8 @@ def run_all_and_report(
             batch_episodes=a2c_batch_episodes,
         )
         a2c_pol = a2c_policy_fn(a2c_net, device=str(next(a2c_net.parameters()).device))
-        a2c_acc, a2c_reward = _evaluate(a2c_pol)
-        results["A2C"] = {"acc": a2c_acc, "reward": a2c_reward}
+        a2c_m = _evaluate(a2c_pol)
+        results["A2C"] = a2c_m
         _maybe_demo(a2c_pol, "A2C")
 
     if "a3c" in models:
@@ -224,8 +223,8 @@ def run_all_and_report(
             rollouts_per_update=a3c_rollouts,
         )
         a3c_pol = a2c_policy_fn(a3c_net, device=str(next(a3c_net.parameters()).device))
-        a3c_acc, a3c_reward = _evaluate(a3c_pol)
-        results["A3C"] = {"acc": a3c_acc, "reward": a3c_reward}
+        a3c_m = _evaluate(a3c_pol)
+        results["A3C"] = a3c_m
         _maybe_demo(a3c_pol, "A3C")
 
     if "ppo" in models:
@@ -243,24 +242,19 @@ def run_all_and_report(
             bc_weight=ppo_bc_weight,
         )
         ppo_pol = a2c_policy_fn(ppo_net, device=str(next(ppo_net.parameters()).device))
-        ppo_acc, ppo_reward = _evaluate(ppo_pol)
-        results["PPO"] = {"acc": ppo_acc, "reward": ppo_reward}
+        ppo_m = _evaluate(ppo_pol)
+        results["PPO"] = ppo_m
         _maybe_demo(ppo_pol, "PPO")
 
-    if env_type == "interactive":
-        print("\n=== Test Metrics (avg score) ===")
-        for name, m in results.items():
-            print(f"{name:<10}: avg_score={m['reward']:.3f}")
-    else:
-        print("\n=== Test Metrics (category accuracy, avg reward) ===")
-        for name, m in results.items():
-            print(f"{name:<10}: acc={m['acc']:.3f}, reward={m['reward']:.3f}")
+    print("\n=== Test Metrics (interactive: avg score, VPR, regret) ===")
+    for name, m in results.items():
+        print(f"{name:<12}: avg_score={m['reward']:.3f}  vpr={m['vpr']:.3f}  regret={m['regret']:.3f}  regret_ratio={m['regret_ratio']:.3f}")
     
     # Optional CSV logging
     if metrics_csv:
         # Default superset header (new schema). We'll fall back to the existing file's header if present.
         default_fieldnames = [
-            "timestamp", "model", "acc", "reward", "seed", "env_type",
+            "timestamp", "model", "reward", "vpr", "regret", "regret_ratio", "seed", "env_type",
             # env/reward weights
             "reward_correct_w", "reward_score_w",
             # Q-Learning
@@ -278,15 +272,16 @@ def run_all_and_report(
         ts = datetime.now(timezone.utc).isoformat()
         rows = []
         for model_name, m in results.items():
-            acc = m["acc"]
             rew = m["reward"]
             rows.append({
                 "timestamp": ts,
                 "model": model_name,
-                "acc": ("" if env_type == "interactive" else acc),
                 "reward": rew,
+                "vpr": m.get("vpr", float("nan")),
+                "regret": m.get("regret", float("nan")),
+                "regret_ratio": m.get("regret_ratio", float("nan")),
                 "seed": seed,
-                "env_type": env_type,
+                "env_type": "interactive",
                 "reward_correct_w": reward_correct_w,
                 "reward_score_w": reward_score_w,
                 "ql_epochs": ql_epochs,
@@ -349,6 +344,10 @@ def run_all_and_report(
                         existing_header = default_fieldnames
             except Exception:
                 existing_header = default_fieldnames
+            # Warn if the existing header lacks new fields; they will be ignored when appending.
+            missing_new = [c for c in ["vpr", "regret", "regret_ratio", "env_type"] if c not in existing_header]
+            if missing_new:
+                print(f"[warn] metrics_csv header missing new fields {missing_new}; they will not be recorded unless you start a new CSV.")
             fieldnames_to_use = existing_header
         else:
             fieldnames_to_use = default_fieldnames
@@ -363,7 +362,7 @@ def run_all_and_report(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run curriculum sequencing RL experiments")
+    parser = argparse.ArgumentParser(description="Run curriculum sequencing RL experiments (interactive env; reward-based evaluation with VPR/regret diagnostics)")
     here = os.path.dirname(os.path.abspath(__file__))
     default_data = os.path.abspath(os.path.join(here, "..", "preprocessed_kt_data.csv"))
     parser.add_argument("--data", type=str, default=default_data, help="Path to preprocessed CSV")
@@ -375,10 +374,9 @@ if __name__ == "__main__":
     parser.add_argument("--eval_episodes", type=int, default=300)
     parser.add_argument("--reward_correct_w", type=float, default=0.5, help="Weight for correctness in reward")
     parser.add_argument("--reward_score_w", type=float, default=0.5, help="Weight for next score in reward")
-    parser.add_argument("--env_type", type=str, default="passive", choices=["passive", "interactive"], help="Which environment to use")
     parser.add_argument("--models", type=str, default="ql,dqn,a2c,a3c,ppo", help="Comma-separated models to run")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--metrics_csv", type=str, default=None, help="Path to CSV file to append metrics")
+    parser.add_argument("--metrics_csv", type=str, default=None, help="Path to CSV file to append reward/diagnostics metrics")
     parser.add_argument("--no_chance", dest="include_chance", action="store_false", help="Disable chance baseline evaluation")
     parser.set_defaults(include_chance=True)
     parser.add_argument("--no_trivial", dest="include_trivial", action="store_false", help="Disable trivial baseline (predict current category)")
@@ -439,6 +437,11 @@ if __name__ == "__main__":
     parser.add_argument("--ppo_bc_warmup", type=int, default=2)
     parser.add_argument("--ppo_bc_weight", type=float, default=1.0)
     args = parser.parse_args()
+    # Notes for interactive runs (always interactive)
+    if args.dqn_select_best_on_val:
+        print("[note] Interactive env: validation-based model selection is not meaningful; pass --no_dqn_select_best to disable.")
+    if args.ql_select_best_on_val:
+        print("[note] Interactive env: validation-based model selection is not meaningful; pass --no_ql_select_best to disable.")
 
     model_list = [m.strip().lower() for m in args.models.split(',') if m.strip()]
     print(f"Using data: {args.data}")
@@ -453,7 +456,6 @@ if __name__ == "__main__":
         models=model_list,
         reward_correct_w=args.reward_correct_w,
         reward_score_w=args.reward_score_w,
-        env_type=args.env_type,
         seed=args.seed,
         metrics_csv=args.metrics_csv,
         include_chance=args.include_chance,
