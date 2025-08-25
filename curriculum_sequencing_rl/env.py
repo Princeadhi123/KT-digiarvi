@@ -96,6 +96,16 @@ class InteractiveReorderEnv:
         self.challenge_band = float(challenge_band)
         self.invalid_penalty = float(invalid_penalty)
 
+        # Precompute reward normalization denominator for reporting (sum of weights)
+        self._reward_den = float(
+            self.rw_score
+            + self.rew_improve_w
+            + self.rew_deficit_w
+            + self.rew_spacing_w
+            + self.rew_diversity_w
+            + self.rew_challenge_w
+        )
+
         # Basic checks
         required = [
             "student_id", "exercise_id", "category", "category_group", "order", "normalized_score",
@@ -273,6 +283,13 @@ class InteractiveReorderEnv:
                 self._recent_choices.append(cat_id)
             except Exception:
                 pass
+            base_reward = 0.0
+            improve = 0.0
+            deficit = 0.0
+            spacing = 0.0
+            diversity = 0.0
+            challenge = 0.0
+            shaping_reward = 0.0
             reward = float(self.invalid_penalty)
         else:
             # Reward equals (weighted) normalized score of chosen exercise + shaping terms
@@ -321,13 +338,28 @@ class InteractiveReorderEnv:
             except Exception:
                 pass
 
+        # Build info and advance state
+        den = self._reward_den
+        reward_norm = float(reward / den) if den > 1e-9 else float("nan")
+        info = {
+            "valid_action": bool(valid),
+            "base_reward": float(base_reward) if 'base_reward' in locals() else 0.0,
+            "improve": float(improve) if 'improve' in locals() else 0.0,
+            "deficit": float(deficit) if 'deficit' in locals() else 0.0,
+            "spacing": float(spacing) if 'spacing' in locals() else 0.0,
+            "diversity": float(diversity) if 'diversity' in locals() else 0.0,
+            "challenge": float(challenge) if 'challenge' in locals() else 0.0,
+            "shaping_reward": float(shaping_reward) if 'shaping_reward' in locals() else 0.0,
+            "reward_norm": reward_norm,
+        }
+
         # Advance state
         self._cur_idx = chosen_idx
         self._consumed.add(chosen_idx)
         done = len(self._consumed) >= len(self.current_student_df)
         self._step_t += 1
         next_state = None if done else self._build_state_from_row(self.current_student_df.iloc[self._cur_idx])
-        return next_state, float(reward), bool(done), {"valid_action": bool(valid)}
+        return next_state, float(reward), bool(done), info
 
     def estimate_immediate_reward(self, action: int) -> float:
         """Estimate the immediate reward if `action` were taken now, without mutating state.

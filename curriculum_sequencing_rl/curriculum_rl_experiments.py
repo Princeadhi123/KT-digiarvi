@@ -16,6 +16,7 @@ try:
         eval_policy_valid_pick_rate,
         eval_policy_regret,
         print_sample_rollouts,
+        eval_policy_interactive_metrics,
     )
     from .q_learning import train_q_learning, greedy_from_qtable
     from .dqn import train_dqn, dqn_policy
@@ -29,6 +30,7 @@ except ImportError:  # pragma: no cover - fallback for script mode
         eval_policy_valid_pick_rate,
         eval_policy_regret,
         print_sample_rollouts,
+        eval_policy_interactive_metrics,
     )
     from q_learning import train_q_learning, greedy_from_qtable
     from dqn import train_dqn, dqn_policy
@@ -166,15 +168,8 @@ def run_all_and_report(
         return _p
 
     def _evaluate(policy_fn):
-        avg = eval_policy_avg_score(env, policy_fn, mode="test", episodes=eval_episodes)
-        vpr = eval_policy_valid_pick_rate(env, policy_fn, mode="test", episodes=eval_episodes)
-        regret, regret_ratio = eval_policy_regret(env, policy_fn, mode="test", episodes=eval_episodes)
-        return {
-            "reward": float(avg),
-            "vpr": float(vpr),
-            "regret": float(regret),
-            "regret_ratio": float(regret_ratio),
-        }
+        # Aggregate shaped reward breakdown + diagnostics in a single pass
+        return eval_policy_interactive_metrics(env, policy_fn, mode="test", episodes=eval_episodes)
 
     if include_chance:
         chance_policy = _random_policy_fn(env)
@@ -299,15 +294,19 @@ def run_all_and_report(
         results["PPO"] = ppo_m
         _maybe_demo(ppo_pol, "PPO")
 
-    print("\n=== Test Metrics (interactive: avg score, VPR, regret) ===")
+    print("\n=== Test Metrics (interactive: avg_reward (shaped), VPR, regret) ===")
     for name, m in results.items():
-        print(f"{name:<12}: avg_score={m['reward']:.3f}  vpr={m['vpr']:.3f}  regret={m['regret']:.3f}  regret_ratio={m['regret_ratio']:.3f}")
+        rn = m.get('reward_norm', float('nan'))
+        print(f"{name:<12}: avg_reward={m['reward']:.3f}  base={m.get('reward_base', float('nan')):.3f}  norm={rn:.3f}  vpr={m['vpr']:.3f}  regret={m['regret']:.3f}  regret_ratio={m['regret_ratio']:.3f}  |  base%={m.get('reward_base', float('nan'))*100:.1f}  norm%={rn*100:.1f}  vpr%={m['vpr']*100:.1f}  regret%={m['regret_ratio']*100:.1f}")
     
     # Optional CSV logging
     if metrics_csv:
         # Default superset header (new schema). We'll fall back to the existing file's header if present.
         default_fieldnames = [
-            "timestamp", "model", "reward", "vpr", "regret", "regret_ratio", "seed", "env_type",
+            "timestamp", "model", "reward", "vpr", "vpr_pct", "regret", "regret_ratio", "regret_ratio_pct", "seed", "env_type",
+            # new reward breakdown
+            "reward_base", "reward_shaping", "reward_norm", "reward_base_pct", "reward_norm_pct",
+            "term_improve", "term_deficit", "term_spacing", "term_diversity", "term_challenge",
             # env/reward weights
             "reward_correct_w", "reward_score_w",
             # shaping weights/params
@@ -334,10 +333,22 @@ def run_all_and_report(
                 "model": model_name,
                 "reward": rew,
                 "vpr": m.get("vpr", float("nan")),
+                "vpr_pct": (m.get("vpr", float("nan")) * 100.0) if not np.isnan(m.get("vpr", float("nan"))) else float("nan"),
                 "regret": m.get("regret", float("nan")),
                 "regret_ratio": m.get("regret_ratio", float("nan")),
+                "regret_ratio_pct": (m.get("regret_ratio", float("nan")) * 100.0) if not np.isnan(m.get("regret_ratio", float("nan"))) else float("nan"),
                 "seed": seed,
                 "env_type": "interactive",
+                "reward_base": m.get("reward_base", float("nan")),
+                "reward_shaping": m.get("reward_shaping", float("nan")),
+                "reward_norm": m.get("reward_norm", float("nan")),
+                "reward_base_pct": (m.get("reward_base", float("nan")) * 100.0) if not np.isnan(m.get("reward_base", float("nan"))) else float("nan"),
+                "reward_norm_pct": (m.get("reward_norm", float("nan")) * 100.0) if not np.isnan(m.get("reward_norm", float("nan"))) else float("nan"),
+                "term_improve": m.get("term_improve", float("nan")),
+                "term_deficit": m.get("term_deficit", float("nan")),
+                "term_spacing": m.get("term_spacing", float("nan")),
+                "term_diversity": m.get("term_diversity", float("nan")),
+                "term_challenge": m.get("term_challenge", float("nan")),
                 "reward_correct_w": reward_correct_w,
                 "reward_score_w": reward_score_w,
                 "rew_improve_w": rew_improve_w,
@@ -413,7 +424,11 @@ def run_all_and_report(
             except Exception:
                 existing_header = default_fieldnames
             # Warn if the existing header lacks new fields; they will be ignored when appending.
-            missing_new = [c for c in ["vpr", "regret", "regret_ratio", "env_type"] if c not in existing_header]
+            missing_new = [c for c in [
+                "vpr", "vpr_pct", "regret", "regret_ratio", "regret_ratio_pct", "env_type",
+                "reward_base", "reward_shaping", "reward_norm", "reward_base_pct", "reward_norm_pct",
+                "term_improve", "term_deficit", "term_spacing", "term_diversity", "term_challenge",
+            ] if c not in existing_header]
             if missing_new:
                 print(f"[warn] metrics_csv header missing new fields {missing_new}; they will not be recorded unless you start a new CSV.")
             fieldnames_to_use = existing_header

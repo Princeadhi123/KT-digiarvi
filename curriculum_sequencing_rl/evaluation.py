@@ -161,3 +161,106 @@ def eval_policy_regret(env: Any, policy_fn: Callable[[Any, int], int], mode: str
     """
     _, avg_regret, avg_regret_ratio, _ = _run_interactive_diagnostics(env, policy_fn, mode, episodes)
     return float(avg_regret), float(avg_regret_ratio)
+
+
+def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], int], mode: str = "test", episodes: int = 200) -> dict:
+    """Evaluate a policy and return a dict with shaped reward breakdown and diagnostics.
+
+    Returns keys:
+      - reward: avg shaped reward
+      - reward_base: avg base (score-weighted) reward
+      - reward_shaping: avg sum of weighted shaping components
+      - reward_norm: avg normalized shaped reward (by sum of weights; NaN if denom==0)
+      - term_improve, term_deficit, term_spacing, term_diversity, term_challenge: avg raw components
+      - vpr: valid pick rate
+      - regret, regret_ratio: instantaneous regret diagnostics
+    """
+    total_steps = 0
+    reward_sum = 0.0
+    base_sum = 0.0
+    shaping_sum = 0.0
+    norm_sum = 0.0
+    norm_count = 0
+    improve_sum = 0.0
+    deficit_sum = 0.0
+    spacing_sum = 0.0
+    diversity_sum = 0.0
+    challenge_sum = 0.0
+    vpr_hits = 0.0
+    regret_sum = 0.0
+    regret_ratio_sum = 0.0
+
+    interactive_ok = hasattr(env, "valid_action_ids") and hasattr(env, "_rows_by_action")
+    for _ in range(episodes):
+        state = env.reset(mode)
+        done = False
+        while not done:
+            best_pre = _best_remaining_immediate_reward(env) if interactive_ok else float("nan")
+            cur_cat = int(np.argmax(state[: env.action_size]))
+            action = policy_fn(state, cur_cat)
+            next_state, reward, done, info = env.step(action)
+            reward = float(reward)
+            reward_sum += reward
+            total_steps += 1
+
+            if isinstance(info, dict):
+                # VPR
+                if "valid_action" in info:
+                    vpr_hits += 1.0 if bool(info.get("valid_action")) else 0.0
+                # Components (optional in older envs)
+                base_sum += float(info.get("base_reward", 0.0))
+                shaping_sum += float(info.get("shaping_reward", 0.0))
+                norm_val = info.get("reward_norm", float("nan"))
+                try:
+                    fv = float(norm_val)
+                    if not np.isnan(fv):
+                        norm_sum += fv
+                        norm_count += 1
+                except Exception:
+                    pass
+                improve_sum += float(info.get("improve", 0.0))
+                deficit_sum += float(info.get("deficit", 0.0))
+                spacing_sum += float(info.get("spacing", 0.0))
+                diversity_sum += float(info.get("diversity", 0.0))
+                challenge_sum += float(info.get("challenge", 0.0))
+
+            # Regret
+            if not np.isnan(best_pre):
+                reg = max(0.0, best_pre - reward)
+                regret_sum += reg
+                if best_pre > 1e-9:
+                    regret_ratio_sum += max(0.0, reg / best_pre)
+            state = next_state if not done else state
+
+    if total_steps <= 0:
+        return {
+            "reward": 0.0,
+            "reward_base": 0.0,
+            "reward_shaping": 0.0,
+            "reward_norm": float("nan"),
+            "term_improve": 0.0,
+            "term_deficit": 0.0,
+            "term_spacing": 0.0,
+            "term_diversity": 0.0,
+            "term_challenge": 0.0,
+            "vpr": float("nan"),
+            "regret": float("nan"),
+            "regret_ratio": float("nan"),
+        }
+
+    inv_steps = 1.0 / float(total_steps)
+    return {
+        "reward": reward_sum * inv_steps,
+        "reward_base": base_sum * inv_steps,
+        "reward_shaping": shaping_sum * inv_steps,
+        # Average over steps where reward_norm was defined (denominator > 0)
+        "reward_norm": (norm_sum / norm_count) if norm_count > 0 else float("nan"),
+        "term_improve": improve_sum * inv_steps,
+        "term_deficit": deficit_sum * inv_steps,
+        "term_spacing": spacing_sum * inv_steps,
+        "term_diversity": diversity_sum * inv_steps,
+        "term_challenge": challenge_sum * inv_steps,
+        "vpr": vpr_hits * inv_steps,
+        "regret": regret_sum * inv_steps,
+        "regret_ratio": regret_ratio_sum * inv_steps,
+    }
