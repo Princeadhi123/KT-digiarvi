@@ -307,13 +307,22 @@ class InteractiveReorderEnv:
             # Spacing: higher if category not practiced recently
             last_seen = self._last_step_seen.get(cat_id)
             if last_seen is None:
-                spacing = 1.0
+                # Use a mid-level default for unseen instead of maxing out
+                spacing = 0.5
             else:
                 gap = max(0, int(self._step_t) - int(last_seen))
-                spacing = min(1.0, (gap / max(1, self.spacing_window)))
-            # Diversity: bonus if not in recent window
+                denom = float(gap + max(1, self.spacing_window))
+                spacing = float(gap / denom)
+            # Diversity: use recent frequency (smooth) rather than binary
             try:
-                diversity = 1.0 if (self.diversity_recent_k > 0 and (cat_id not in self._recent_choices)) else 0.0
+                recent = list(self._recent_choices)
+                freq = recent.count(cat_id)
+                denom = max(1, len(recent))
+                if freq == 0:
+                    # Unseen in recent window: give mid-level credit, not max
+                    diversity = 0.5
+                else:
+                    diversity = float(1.0 - (freq / denom))
             except Exception:
                 diversity = 0.0
             # Challenge: encourage moderate difficulty near target score
@@ -386,12 +395,19 @@ class InteractiveReorderEnv:
             deficit = max(0.0, self.need_threshold - ema_prev)
             last_seen = self._last_step_seen.get(cat_id)
             if last_seen is None:
-                spacing = 1.0
+                spacing = 0.5
             else:
                 gap = max(0, int(self._step_t) - int(last_seen))
-                spacing = min(1.0, (gap / max(1, self.spacing_window)))
+                denom = float(gap + max(1, self.spacing_window))
+                spacing = float(gap / denom)
             try:
-                diversity = 1.0 if (self.diversity_recent_k > 0 and (cat_id not in self._recent_choices)) else 0.0
+                recent = list(self._recent_choices)
+                freq = recent.count(cat_id)
+                denom = max(1, len(recent))
+                if freq == 0:
+                    diversity = 0.5
+                else:
+                    diversity = float(1.0 - (freq / denom))
             except Exception:
                 diversity = 0.0
             band = max(1e-6, self.challenge_band)
