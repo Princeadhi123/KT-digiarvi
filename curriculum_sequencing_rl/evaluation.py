@@ -77,11 +77,18 @@ def eval_policy_avg_score(env: Any, policy_fn: Callable[[Any, int], int], mode: 
 def _best_remaining_immediate_reward(env: Any) -> float:
     """Return the best immediate reward available from current interactive state.
 
-    Assumes InteractiveReorderEnv internals. Returns NaN if not available.
+    Prefers env.estimate_immediate_reward(aid) when available (captures shaping).
+    Falls back to score-only based on normalized_score. Returns NaN on failure.
     """
     try:
-        # Collect the next unconsumed row for each valid action and take max normalized_score
         valid_ids = list(env.valid_action_ids())
+        # Preferred path: environment-provided estimator (includes shaping if configured)
+        if hasattr(env, "estimate_immediate_reward"):
+            if not valid_ids:
+                return 0.0
+            best_est = max(float(env.estimate_immediate_reward(aid)) for aid in valid_ids)
+            return float(best_est)
+        # Fallback: compute score-only best from env internals
         best = 0.0
         for aid in valid_ids:
             idxs = env._rows_by_action.get(int(aid), [])  # type: ignore[attr-defined]

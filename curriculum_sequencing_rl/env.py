@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
 
+from collections import deque
 import numpy as np
 import pandas as pd
 
@@ -54,6 +55,20 @@ class InteractiveReorderEnv:
         reward_correct_w: float = 0.0,
         reward_score_w: float = 1.0,
         action_on: str = "category",  # or "category_group"
+        # Multi-objective shaping weights (all default to 0.0 for backward-compat)
+        rew_improve_w: float = 0.0,
+        rew_deficit_w: float = 0.0,
+        rew_spacing_w: float = 0.0,
+        rew_diversity_w: float = 0.0,
+        rew_challenge_w: float = 0.0,
+        # Shaping hyperparameters
+        ema_alpha: float = 0.3,
+        need_threshold: float = 0.6,
+        spacing_window: int = 5,
+        diversity_recent_k: int = 5,
+        challenge_target: float = 0.7,
+        challenge_band: float = 0.4,
+        invalid_penalty: float = 0.0,
     ):
         self.rng = np.random.default_rng(seed)
         self.df = pd.read_csv(data_path)
@@ -65,6 +80,21 @@ class InteractiveReorderEnv:
         else:
             self.rw_correct = float(reward_correct_w) / total_w
             self.rw_score = float(reward_score_w) / total_w
+
+        # Store shaping weights and params
+        self.rew_improve_w = float(rew_improve_w)
+        self.rew_deficit_w = float(rew_deficit_w)
+        self.rew_spacing_w = float(rew_spacing_w)
+        self.rew_diversity_w = float(rew_diversity_w)
+        self.rew_challenge_w = float(rew_challenge_w)
+
+        self.ema_alpha = float(ema_alpha)
+        self.need_threshold = float(need_threshold)
+        self.spacing_window = int(spacing_window)
+        self.diversity_recent_k = int(diversity_recent_k)
+        self.challenge_target = float(challenge_target)
+        self.challenge_band = float(challenge_band)
+        self.invalid_penalty = float(invalid_penalty)
 
         # Basic checks
         required = [
@@ -112,12 +142,25 @@ class InteractiveReorderEnv:
         # State: one-hot + 8 numeric feats
         self.state_dim = self.action_size + 8
 
+        # Precompute category mean scores for EMA initialization
+        self.category_mean_score: Dict[int, float] = {}
+        for aid in range(self.action_size):
+            m = float(self.df[self.df["category_id"] == aid]["normalized_score"].astype(float).dropna().mean())
+            if np.isnan(m):
+                m = 0.5
+            self.category_mean_score[aid] = m
+
         # Episode vars
         self.current_student_id: Optional[int] = None
         self.current_student_df: Optional[pd.DataFrame] = None
         self._rows_by_action: Dict[int, List[int]] = {}
         self._consumed: set = set()
         self._cur_idx: int = 0
+        # Shaping trackers (episode-scoped)
+        self._ema_scores: Dict[int, float] = {}
+        self._last_step_seen: Dict[int, Optional[int]] = {}
+        self._recent_choices: deque = deque(maxlen=self.diversity_recent_k)
+        self._step_t: int = 0
 
     def _split_students(self, train_ratio: float, val_ratio: float, seed: int) -> SplitData:
         students = self.df["student_id"].unique()
@@ -185,6 +228,11 @@ class InteractiveReorderEnv:
         self._build_rows_by_action()
         self._consumed = set([0])  # mark the first row as already done
         self._cur_idx = 0
+        # Initialize shaping trackers
+        self._ema_scores = {aid: float(self.category_mean_score.get(aid, 0.5)) for aid in range(self.action_size)}
+        self._last_step_seen = {aid: None for aid in range(self.action_size)}
+        self._recent_choices = deque(maxlen=self.diversity_recent_k)
+        self._step_t = 0
         return self._build_state_from_row(self.current_student_df.iloc[self._cur_idx])
 
     def _pick_first_unconsumed(self) -> Optional[int]:
@@ -209,20 +257,131 @@ class InteractiveReorderEnv:
                 break
 
         if chosen_idx is None:
-            # Invalid action: auto-advance to next unconsumed row with zero reward
+            # Invalid action: auto-advance to next unconsumed row; give optional penalty
             chosen_idx = self._pick_first_unconsumed()
             if chosen_idx is None:
                 return None, 0.0, True, {}
-            reward = 0.0
-        else:
-            # Reward equals (weighted) normalized score of chosen exercise
             row = self.current_student_df.iloc[chosen_idx]
+            cat_id = int(row["category_id"])
             norm_score = float(row.get("normalized_score", 0.0))
-            reward = self.rw_score * norm_score  # ignore correctness term in interactive mode
+            # Update trackers to reflect the consumed exercise (even though invalid choice)
+            prev_ema = float(self._ema_scores.get(cat_id, self.category_mean_score.get(cat_id, 0.5)))
+            new_ema = (1.0 - self.ema_alpha) * prev_ema + self.ema_alpha * norm_score
+            self._ema_scores[cat_id] = new_ema
+            self._last_step_seen[cat_id] = self._step_t
+            try:
+                self._recent_choices.append(cat_id)
+            except Exception:
+                pass
+            reward = float(self.invalid_penalty)
+        else:
+            # Reward equals (weighted) normalized score of chosen exercise + shaping terms
+            row = self.current_student_df.iloc[chosen_idx]
+            cat_id = int(row["category_id"])
+            norm_score = float(row.get("normalized_score", 0.0))
+            base_reward = self.rw_score * norm_score  # ignore correctness term in interactive mode
+
+            # Shaping terms (all in [0,1] approx)
+            ema_prev = float(self._ema_scores.get(cat_id, self.category_mean_score.get(cat_id, 0.5)))
+            # Improvement over running baseline (positive-only to avoid double-penalizing)
+            improve = max(0.0, norm_score - ema_prev)
+            # Practice where weak (deficit relative to target mastery)
+            deficit = max(0.0, self.need_threshold - ema_prev)
+            # Spacing: higher if category not practiced recently
+            last_seen = self._last_step_seen.get(cat_id)
+            if last_seen is None:
+                spacing = 1.0
+            else:
+                gap = max(0, int(self._step_t) - int(last_seen))
+                spacing = min(1.0, (gap / max(1, self.spacing_window)))
+            # Diversity: bonus if not in recent window
+            try:
+                diversity = 1.0 if (self.diversity_recent_k > 0 and (cat_id not in self._recent_choices)) else 0.0
+            except Exception:
+                diversity = 0.0
+            # Challenge: encourage moderate difficulty near target score
+            band = max(1e-6, self.challenge_band)
+            challenge = max(0.0, 1.0 - abs(norm_score - self.challenge_target) / band)
+
+            shaping_reward = (
+                self.rew_improve_w * improve
+                + self.rew_deficit_w * deficit
+                + self.rew_spacing_w * spacing
+                + self.rew_diversity_w * diversity
+                + self.rew_challenge_w * challenge
+            )
+            reward = float(base_reward + shaping_reward)
+
+            # Update trackers after applying reward
+            new_ema = (1.0 - self.ema_alpha) * ema_prev + self.ema_alpha * norm_score
+            self._ema_scores[cat_id] = new_ema
+            self._last_step_seen[cat_id] = self._step_t
+            try:
+                self._recent_choices.append(cat_id)
+            except Exception:
+                pass
 
         # Advance state
         self._cur_idx = chosen_idx
         self._consumed.add(chosen_idx)
         done = len(self._consumed) >= len(self.current_student_df)
+        self._step_t += 1
         next_state = None if done else self._build_state_from_row(self.current_student_df.iloc[self._cur_idx])
         return next_state, float(reward), bool(done), {"valid_action": bool(valid)}
+
+    def estimate_immediate_reward(self, action: int) -> float:
+        """Estimate the immediate reward if `action` were taken now, without mutating state.
+
+        Used by diagnostics (e.g., regret). Falls back to base score-only estimate if shaping cannot be computed.
+        """
+        try:
+            idxs = self._rows_by_action.get(int(action), [])
+            chosen_idx = None
+            for i in idxs:
+                if i not in self._consumed:
+                    chosen_idx = i
+                    break
+            if chosen_idx is None:
+                return float(self.invalid_penalty)
+            row = self.current_student_df.iloc[chosen_idx]
+            cat_id = int(row["category_id"])
+            norm_score = float(row.get("normalized_score", 0.0))
+            base = self.rw_score * norm_score
+
+            # Compute shaping components using current trackers (no mutation)
+            ema_prev = float(self._ema_scores.get(cat_id, self.category_mean_score.get(cat_id, 0.5)))
+            improve = max(0.0, norm_score - ema_prev)
+            deficit = max(0.0, self.need_threshold - ema_prev)
+            last_seen = self._last_step_seen.get(cat_id)
+            if last_seen is None:
+                spacing = 1.0
+            else:
+                gap = max(0, int(self._step_t) - int(last_seen))
+                spacing = min(1.0, (gap / max(1, self.spacing_window)))
+            try:
+                diversity = 1.0 if (self.diversity_recent_k > 0 and (cat_id not in self._recent_choices)) else 0.0
+            except Exception:
+                diversity = 0.0
+            band = max(1e-6, self.challenge_band)
+            challenge = max(0.0, 1.0 - abs(norm_score - self.challenge_target) / band)
+
+            return float(
+                base
+                + self.rew_improve_w * improve
+                + self.rew_deficit_w * deficit
+                + self.rew_spacing_w * spacing
+                + self.rew_diversity_w * diversity
+                + self.rew_challenge_w * challenge
+            )
+        except Exception:
+            # Fallback: score-only
+            try:
+                idxs = self._rows_by_action.get(int(action), [])
+                for i in idxs:
+                    if i not in self._consumed:
+                        row = self.current_student_df.iloc[i]
+                        norm_score = float(row.get("normalized_score", 0.0))
+                        return float(self.rw_score * norm_score)
+            except Exception:
+                pass
+            return 0.0

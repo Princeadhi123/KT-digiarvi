@@ -51,6 +51,19 @@ def run_all_and_report(
     models: List[str] = None,
     reward_correct_w: float = 0.0,
     reward_score_w: float = 1.0,
+    # Multi-objective shaping (defaults off)
+    rew_improve_w: float = 0.0,
+    rew_deficit_w: float = 0.0,
+    rew_spacing_w: float = 0.0,
+    rew_diversity_w: float = 0.0,
+    rew_challenge_w: float = 0.0,
+    ema_alpha: float = 0.3,
+    need_threshold: float = 0.6,
+    spacing_window: int = 5,
+    diversity_recent_k: int = 5,
+    challenge_target: float = 0.7,
+    challenge_band: float = 0.4,
+    invalid_penalty: float = 0.0,
     # Reproducibility
     seed: int = 42,
     # Q-Learning params
@@ -118,7 +131,25 @@ def run_all_and_report(
         torch.cuda.manual_seed_all(seed)
 
     # Create environment (interactive-only)
-    env = InteractiveReorderEnv(data_path, reward_correct_w=reward_correct_w, reward_score_w=reward_score_w, seed=seed)
+    env = InteractiveReorderEnv(
+        data_path,
+        reward_correct_w=reward_correct_w,
+        reward_score_w=reward_score_w,
+        seed=seed,
+        # shaping
+        rew_improve_w=rew_improve_w,
+        rew_deficit_w=rew_deficit_w,
+        rew_spacing_w=rew_spacing_w,
+        rew_diversity_w=rew_diversity_w,
+        rew_challenge_w=rew_challenge_w,
+        ema_alpha=ema_alpha,
+        need_threshold=need_threshold,
+        spacing_window=spacing_window,
+        diversity_recent_k=diversity_recent_k,
+        challenge_target=challenge_target,
+        challenge_band=challenge_band,
+        invalid_penalty=invalid_penalty,
+    )
     if models is None:
         models = ["ql", "dqn", "a2c", "a3c", "ppo"]
 
@@ -279,6 +310,9 @@ def run_all_and_report(
             "timestamp", "model", "reward", "vpr", "regret", "regret_ratio", "seed", "env_type",
             # env/reward weights
             "reward_correct_w", "reward_score_w",
+            # shaping weights/params
+            "rew_improve_w", "rew_deficit_w", "rew_spacing_w", "rew_diversity_w", "rew_challenge_w",
+            "ema_alpha", "need_threshold", "spacing_window", "diversity_recent_k", "challenge_target", "challenge_band", "invalid_penalty",
             # Q-Learning
             "ql_epochs", "ql_alpha", "ql_gamma", "ql_eps_start", "ql_eps_end", "ql_eps_decay_epochs", "ql_select_best_on_val", "ql_val_episodes",
             # DQN
@@ -306,6 +340,18 @@ def run_all_and_report(
                 "env_type": "interactive",
                 "reward_correct_w": reward_correct_w,
                 "reward_score_w": reward_score_w,
+                "rew_improve_w": rew_improve_w,
+                "rew_deficit_w": rew_deficit_w,
+                "rew_spacing_w": rew_spacing_w,
+                "rew_diversity_w": rew_diversity_w,
+                "rew_challenge_w": rew_challenge_w,
+                "ema_alpha": ema_alpha,
+                "need_threshold": need_threshold,
+                "spacing_window": spacing_window,
+                "diversity_recent_k": diversity_recent_k,
+                "challenge_target": challenge_target,
+                "challenge_band": challenge_band,
+                "invalid_penalty": invalid_penalty,
                 "ql_epochs": ql_epochs,
                 "ql_alpha": ql_alpha,
                 "ql_gamma": ql_gamma,
@@ -396,6 +442,19 @@ if __name__ == "__main__":
     parser.add_argument("--eval_episodes", type=int, default=300)
     parser.add_argument("--reward_correct_w", type=float, default=0.0, help="Correctness weight (interactive env ignores correctness in step; offline learners may use)")
     parser.add_argument("--reward_score_w", type=float, default=1.0, help="Score weight (interactive env uses score-only reward by design)")
+    # Shaping flags (all optional; defaults keep old behavior)
+    parser.add_argument("--rew_improve_w", type=float, default=0.0, help="Weight for improvement over EMA baseline")
+    parser.add_argument("--rew_deficit_w", type=float, default=0.0, help="Weight for practicing categories with low EMA vs need_threshold")
+    parser.add_argument("--rew_spacing_w", type=float, default=0.0, help="Weight for spacing bonus (time since last practice)")
+    parser.add_argument("--rew_diversity_w", type=float, default=0.0, help="Weight for diversity bonus (not in recent K choices)")
+    parser.add_argument("--rew_challenge_w", type=float, default=0.0, help="Weight for challenge proximity to target score")
+    parser.add_argument("--ema_alpha", type=float, default=0.3, help="EMA alpha for improvement baseline")
+    parser.add_argument("--need_threshold", type=float, default=0.6, help="Target mastery threshold for deficit computation")
+    parser.add_argument("--spacing_window", type=int, default=5, help="Window to normalize spacing bonus")
+    parser.add_argument("--diversity_recent_k", type=int, default=5, help="Recent choices window for diversity bonus")
+    parser.add_argument("--challenge_target", type=float, default=0.7, help="Target normalized score for desired challenge")
+    parser.add_argument("--challenge_band", type=float, default=0.4, help="Bandwidth around challenge_target for full bonus")
+    parser.add_argument("--invalid_penalty", type=float, default=0.0, help="Penalty when selecting an invalid (unavailable) action")
     parser.add_argument("--models", type=str, default="ql,dqn,a2c,a3c,ppo", help="Comma-separated models to run")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--metrics_csv", type=str, default=None, help="Path to CSV file to append reward/diagnostics metrics")
@@ -482,6 +541,18 @@ if __name__ == "__main__":
         models=model_list,
         reward_correct_w=args.reward_correct_w,
         reward_score_w=args.reward_score_w,
+        rew_improve_w=args.rew_improve_w,
+        rew_deficit_w=args.rew_deficit_w,
+        rew_spacing_w=args.rew_spacing_w,
+        rew_diversity_w=args.rew_diversity_w,
+        rew_challenge_w=args.rew_challenge_w,
+        ema_alpha=args.ema_alpha,
+        need_threshold=args.need_threshold,
+        spacing_window=args.spacing_window,
+        diversity_recent_k=args.diversity_recent_k,
+        challenge_target=args.challenge_target,
+        challenge_band=args.challenge_band,
+        invalid_penalty=args.invalid_penalty,
         seed=args.seed,
         metrics_csv=args.metrics_csv,
         include_chance=args.include_chance,
