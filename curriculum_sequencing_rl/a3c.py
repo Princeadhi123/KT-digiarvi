@@ -2,7 +2,10 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 from typing import Any, Optional
-from a2c import ActorCritic, _bc_pretrain_policy
+try:
+    from .a2c import ActorCritic, _bc_pretrain_policy
+except ImportError:  # pragma: no cover - fallback for script mode
+    from a2c import ActorCritic, _bc_pretrain_policy
 
 
 def train_a3c(
@@ -54,8 +57,15 @@ def train_a3c(
             while not done:
                 st = torch.tensor(s, dtype=torch.float32, device=device).unsqueeze(0)
                 logits, v = net(st)
-                probs = F.softmax(logits, dim=-1)
-                dist = torch.distributions.Categorical(probs=probs)
+                # Action masking: restrict sampling to valid actions if env exposes them
+                masked_logits = logits
+                if hasattr(env, "valid_action_ids"):
+                    vids = env.valid_action_ids()
+                    if len(vids) > 0:
+                        mask = torch.full((env.action_size,), float("-inf"), device=device)
+                        mask[torch.tensor(vids, dtype=torch.long, device=device)] = 0.0
+                        masked_logits = logits + mask
+                dist = torch.distributions.Categorical(logits=masked_logits)
                 a = int(dist.sample().item())
                 ns, r, done, info = env.step(a)
                 ep_states.append(st.squeeze(0))

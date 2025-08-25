@@ -8,7 +8,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from typing import Any, Callable, Optional
-from evaluation import eval_policy_avg_score
+try:
+    from .evaluation import eval_policy_avg_score
+except ImportError:  # pragma: no cover - fallback for script mode
+    from evaluation import eval_policy_avg_score
 
 
 class DuelingQNet(nn.Module):
@@ -58,14 +61,28 @@ class DQNAgent:
         frac = 1.0 - (t / max(1, self.eps_decay_steps))
         return self.eps_end + (self.eps_start - self.eps_end) * frac
 
-    def act(self, state: np.ndarray, training: bool = True) -> int:
-        """Epsilon-greedy action selection; greedy when training=False."""
+    def act(self, state: np.ndarray, training: bool = True, valid_ids: Optional[Any] = None) -> int:
+        """Epsilon-greedy action selection with optional valid action masking.
+
+        Args:
+            state: Current state vector.
+            training: If True, apply epsilon-greedy exploration.
+            valid_ids: Optional iterable of valid action indices. If provided, random
+                exploration samples uniformly from these and greedy selection masks
+                invalid actions by setting their Q-values to -inf.
+        """
         eps = self._epsilon()
         if training and random.random() < eps:
+            if valid_ids is not None and len(valid_ids) > 0:
+                return int(random.choice(list(valid_ids)))
             return random.randrange(self.n_actions)
         with torch.no_grad():
             s = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
             qv = self.q(s)
+            if valid_ids is not None and len(valid_ids) > 0:
+                mask = torch.full((self.n_actions,), float("-inf"), device=self.device)
+                mask[torch.tensor(list(valid_ids), dtype=torch.long, device=self.device)] = 0.0
+                qv = qv + mask
             return int(torch.argmax(qv, dim=1).item())
 
     def remember(self, s: np.ndarray, a: int, r: float, ns: Optional[np.ndarray], d: bool) -> None:
@@ -146,7 +163,8 @@ def train_dqn(env: Any, episodes: int = 50, device: Optional[str] = None,
             done = False
             steps = 0
             while not done and steps < 1000:
-                a = agent.act(s, training=True)
+                vids = env.valid_action_ids() if hasattr(env, "valid_action_ids") else None
+                a = agent.act(s, training=True, valid_ids=vids)
                 ns, r, done, _ = env.step(a)
                 agent.remember(s, a, r, ns, done)
                 agent.replay()
@@ -157,7 +175,7 @@ def train_dqn(env: Any, episodes: int = 50, device: Optional[str] = None,
                 agent.q_tgt.load_state_dict(agent.q.state_dict())
             # Validation selection
             if select_best_on_val and ((ep + 1) % 5 == 0 or ep == episodes - 1):
-                val_avg = eval_policy_avg_score(env, dqn_policy(agent), mode="val", episodes=val_episodes)
+                val_avg = eval_policy_avg_score(env, dqn_policy(agent, env), mode="val", episodes=val_episodes)
                 if val_avg > best_metric:
                     best_metric = val_avg
                     best_state = copy.deepcopy(agent.q.state_dict())
@@ -167,8 +185,13 @@ def train_dqn(env: Any, episodes: int = 50, device: Optional[str] = None,
         return agent
 
 
-def dqn_policy(agent: DQNAgent) -> Callable[[Any, int], int]:
-    """Return a greedy policy function using the trained DQN agent."""
+def dqn_policy(agent: DQNAgent, env: Optional[Any] = None) -> Callable[[Any, int], int]:
+    """Return a greedy policy function using the trained DQN agent.
+
+    If env is provided and exposes valid_action_ids(), invalid actions are masked
+    out at inference time before taking argmax.
+    """
     def _policy(state, cur_cat: int) -> int:
-        return agent.act(state, training=False)
+        vids = env.valid_action_ids() if (env is not None and hasattr(env, "valid_action_ids")) else None
+        return agent.act(state, training=False, valid_ids=vids)
     return _policy

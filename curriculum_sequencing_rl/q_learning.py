@@ -1,8 +1,11 @@
 import numpy as np
 from collections import defaultdict
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
-from evaluation import eval_policy_avg_score
+try:
+    from .evaluation import eval_policy_avg_score
+except ImportError:  # pragma: no cover - fallback for script mode
+    from evaluation import eval_policy_avg_score
 
 
 class QLearningBaseline:
@@ -86,7 +89,7 @@ def train_q_learning(
                     r = env.rw_correct * corr + env.rw_score * float(next_row.get("normalized_score", 0.0))
                 agent.update(cur_cat, a, r, next_cat)
         if select_best_on_val:
-            val_avg = eval_policy_avg_score(env, greedy_from_qtable(agent), mode="val", episodes=val_episodes)
+            val_avg = eval_policy_avg_score(env, greedy_from_qtable(agent, env), mode="val", episodes=val_episodes)
             if val_avg > best_metric:
                 best_metric = val_avg
                 best_Q = agent.Q.copy()
@@ -95,8 +98,20 @@ def train_q_learning(
     return agent
 
 
-def greedy_from_qtable(agent: QLearningBaseline) -> Callable[[Any, int], int]:
-    """Return a greedy policy function derived from the learned Q-table."""
+def greedy_from_qtable(agent: QLearningBaseline, env: Optional[Any] = None) -> Callable[[Any, int], int]:
+    """Return a greedy policy function derived from the learned Q-table.
+
+    If env is provided and exposes valid_action_ids(), invalid actions are masked
+    out before taking argmax.
+    """
     def _policy(state, cur_cat: int) -> int:
-        return int(np.argmax(agent.Q[cur_cat]))
+        q_row = agent.Q[cur_cat]
+        if env is not None and hasattr(env, "valid_action_ids"):
+            vids = env.valid_action_ids()
+            if len(vids) > 0:
+                mask = np.full_like(q_row, -np.inf, dtype=np.float64)
+                mask[vids] = 0.0
+                q_eff = q_row.astype(np.float64) + mask
+                return int(np.argmax(q_eff))
+        return int(np.argmax(q_row))
     return _policy

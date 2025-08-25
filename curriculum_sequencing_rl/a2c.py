@@ -107,8 +107,15 @@ def train_a2c(
             while not done:
                 st = torch.tensor(s, dtype=torch.float32, device=device).unsqueeze(0)
                 logits, v = net(st)
-                probs = F.softmax(logits, dim=-1)
-                dist = torch.distributions.Categorical(probs=probs)
+                # Action masking: restrict sampling to valid actions if env exposes them
+                masked_logits = logits
+                if hasattr(env, "valid_action_ids"):
+                    vids = env.valid_action_ids()
+                    if len(vids) > 0:
+                        mask = torch.full((env.action_size,), float("-inf"), device=device)
+                        mask[torch.tensor(vids, dtype=torch.long, device=device)] = 0.0
+                        masked_logits = logits + mask
+                dist = torch.distributions.Categorical(logits=masked_logits)
                 a = int(dist.sample().item())
                 ns, r, done, info = env.step(a)
                 ep_states.append(st.squeeze(0))
@@ -178,12 +185,22 @@ def train_a2c(
     return net
 
 
-def a2c_policy_fn(net: ActorCritic, device: str) -> Callable[[Any, int], int]:
-    """Return a greedy policy function using the trained A2C network."""
+def a2c_policy_fn(net: ActorCritic, device: str, env: Optional[Any] = None) -> Callable[[Any, int], int]:
+    """Return a greedy policy function using the trained A2C/A3C/PPO network.
+
+    If env is provided and exposes valid_action_ids(), invalid actions are masked
+    out at inference time before taking argmax.
+    """
     def _policy(state, cur_cat: int) -> int:
         with torch.no_grad():
             st = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0)
             logits, _ = net(st)
+            if env is not None and hasattr(env, "valid_action_ids"):
+                vids = env.valid_action_ids()
+                if len(vids) > 0:
+                    mask = torch.full((env.action_size,), float("-inf"), device=device)
+                    mask[torch.tensor(vids, dtype=torch.long, device=device)] = 0.0
+                    logits = logits + mask
             return int(torch.argmax(logits, dim=-1).item())
     return _policy
 

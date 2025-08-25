@@ -1,18 +1,40 @@
 import os
 import argparse
 from typing import List
-from env import InteractiveReorderEnv
-from evaluation import eval_policy_avg_score, eval_policy_valid_pick_rate, eval_policy_regret, print_sample_rollouts
-from q_learning import train_q_learning, greedy_from_qtable
-from dqn import train_dqn, dqn_policy
-from a2c import train_a2c, a2c_policy_fn
-from a3c import train_a3c
-from ppo import train_ppo
 import random
 import numpy as np
 import torch
 import csv
 from datetime import datetime, timezone
+
+# Support both "python -m curriculum_sequencing_rl.curriculum_rl_experiments"
+# and direct script execution "python curriculum_sequencing_rl/curriculum_rl_experiments.py"
+try:
+    from .env import InteractiveReorderEnv
+    from .evaluation import (
+        eval_policy_avg_score,
+        eval_policy_valid_pick_rate,
+        eval_policy_regret,
+        print_sample_rollouts,
+    )
+    from .q_learning import train_q_learning, greedy_from_qtable
+    from .dqn import train_dqn, dqn_policy
+    from .a2c import train_a2c, a2c_policy_fn
+    from .a3c import train_a3c
+    from .ppo import train_ppo
+except ImportError:  # pragma: no cover - fallback for script mode
+    from env import InteractiveReorderEnv
+    from evaluation import (
+        eval_policy_avg_score,
+        eval_policy_valid_pick_rate,
+        eval_policy_regret,
+        print_sample_rollouts,
+    )
+    from q_learning import train_q_learning, greedy_from_qtable
+    from dqn import train_dqn, dqn_policy
+    from a2c import train_a2c, a2c_policy_fn
+    from a3c import train_a3c
+    from ppo import train_ppo
 
 # -----------------------------
 # Orchestration utilities
@@ -167,7 +189,7 @@ def run_all_and_report(
             select_best_on_val=ql_select_best_on_val,
             val_episodes=ql_val_episodes,
         )
-        ql_policy = greedy_from_qtable(ql)
+        ql_policy = greedy_from_qtable(ql, env)
         ql_m = _evaluate(ql_policy)
         results["Q-Learning"] = ql_m
         _maybe_demo(ql_policy, "Q-Learning")
@@ -189,7 +211,7 @@ def run_all_and_report(
             select_best_on_val=dqn_select_best_on_val,
             val_episodes=dqn_val_episodes,
         )
-        dqn_pol = dqn_policy(dqn)
+        dqn_pol = dqn_policy(dqn, env)
         dqn_m = _evaluate(dqn_pol)
         results["DQN"] = dqn_m
         _maybe_demo(dqn_pol, "DQN")
@@ -205,7 +227,7 @@ def run_all_and_report(
             bc_weight=a2c_bc_weight,
             batch_episodes=a2c_batch_episodes,
         )
-        a2c_pol = a2c_policy_fn(a2c_net, device=str(next(a2c_net.parameters()).device))
+        a2c_pol = a2c_policy_fn(a2c_net, device=str(next(a2c_net.parameters()).device), env=env)
         a2c_m = _evaluate(a2c_pol)
         results["A2C"] = a2c_m
         _maybe_demo(a2c_pol, "A2C")
@@ -222,7 +244,7 @@ def run_all_and_report(
             bc_weight=a3c_bc_weight,
             rollouts_per_update=a3c_rollouts,
         )
-        a3c_pol = a2c_policy_fn(a3c_net, device=str(next(a3c_net.parameters()).device))
+        a3c_pol = a2c_policy_fn(a3c_net, device=str(next(a3c_net.parameters()).device), env=env)
         a3c_m = _evaluate(a3c_pol)
         results["A3C"] = a3c_m
         _maybe_demo(a3c_pol, "A3C")
@@ -241,7 +263,7 @@ def run_all_and_report(
             bc_warmup_epochs=ppo_bc_warmup,
             bc_weight=ppo_bc_weight,
         )
-        ppo_pol = a2c_policy_fn(ppo_net, device=str(next(ppo_net.parameters()).device))
+        ppo_pol = a2c_policy_fn(ppo_net, device=str(next(ppo_net.parameters()).device), env=env)
         ppo_m = _evaluate(ppo_pol)
         results["PPO"] = ppo_m
         _maybe_demo(ppo_pol, "PPO")
