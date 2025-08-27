@@ -14,6 +14,10 @@ def create_argument_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     
+    # Configuration file support
+    parser.add_argument("--config", type=str, default=None,
+                       help="Path to configuration file (JSON/YAML)")
+    
     # Data and basic settings
     here = Path(__file__).parent
     default_data = here.parent / "preprocessed_kt_data.csv"
@@ -218,13 +222,20 @@ def main():
     parser = create_argument_parser()
     args = parser.parse_args()
     
-    # Parse models list
-    args.models = [m.strip().lower() for m in args.models.split(',') if m.strip()]
+    # Load configuration from file if provided
+    if args.config:
+        from .core import Config
+        config = Config.from_file(args.config)
+        # Override with any command line arguments
+        config.update_from_args(args)
+        experiment = create_experiment_from_args(args, config)
+    else:
+        # Parse models list
+        args.models = [m.strip().lower() for m in args.models.split(',') if m.strip()]
+        # Create experiment from args only
+        experiment = create_experiment_from_args(args)
     
-    # Create and run experiment
-    experiment = create_experiment_from_args(args)
     results = experiment.run_experiment()
-    
     return results
 
 

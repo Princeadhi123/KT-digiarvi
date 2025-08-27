@@ -121,6 +121,10 @@ class PolicyGradientAgent(BaseAgent):
         self.network.load_state_dict(checkpoint['network'])
         self.optimizer.load_state_dict(checkpoint['optimizer'])
         self.steps_done = checkpoint['steps_done']
+    
+    def update(self, *args, **kwargs) -> dict:
+        """Base update method - to be implemented by specific trainers."""
+        raise NotImplementedError("Update method should be implemented by specific trainers")
 
 
 def behavior_cloning_pretrain(network: ActorCriticNetwork, env: Any, 
@@ -209,7 +213,9 @@ class A2CTrainer(BaseTrainer):
         batch_states, batch_actions, batch_rewards = [], [], []
         batch_values, batch_targets = [], []
         
-        for _ in range(self.config.batch_episodes):
+        # Use rollouts for A3C, batch_episodes for A2C
+        num_episodes = getattr(self.config, 'rollouts', getattr(self.config, 'batch_episodes', 4))
+        for _ in range(num_episodes):
             states, actions, rewards, values, targets = self._collect_episode(env, agent)
             batch_states.append(states)
             batch_actions.append(actions)

@@ -244,16 +244,17 @@ class ExperimentRunner:
         self.logger.info(f"Results saved to {csv_path}")
 
 
-def create_experiment_from_args(args) -> ExperimentRunner:
+def create_experiment_from_args(args, config: Optional[Config] = None) -> ExperimentRunner:
     """Create experiment runner from command line arguments."""
-    # Create default config
-    from .core.config import ExperimentConfig, EnvironmentConfig
-    
-    env_config = EnvironmentConfig(data_path=args.data)
-    exp_config = ExperimentConfig(environment=env_config)
-    config = Config(exp_config)
-    
-    # Update config from args
-    config.update_from_args(args)
+    if config is None:
+        # Create default config
+        from .core.config import ExperimentConfig, EnvironmentConfig
+        
+        env_config = EnvironmentConfig(data_path=args.data)
+        exp_config = ExperimentConfig(environment=env_config)
+        config = Config(exp_config)
+        
+        # Update config from args
+        config.update_from_args(args)
     
     return ExperimentRunner(config)
