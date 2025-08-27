@@ -168,8 +168,11 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
 
     Returns keys:
       - reward: avg shaped reward
-      - reward_base: avg base (score-weighted) reward
-      - reward_shaping: avg sum of weighted shaping components
+      - reward_base: avg base (score-weighted) reward (raw, pre-hybrid)
+      - reward_shaping: avg sum of weighted shaping components (mastery+motivation contributions)
+      - reward_base_contrib: avg base contribution after hybrid weighting
+      - reward_mastery: avg mastery contribution after hybrid weighting
+      - reward_motivation: avg motivation contribution after hybrid weighting
       - reward_norm: avg normalized shaped reward (by sum of weights; NaN if denom==0)
       - term_improve, term_deficit, term_spacing, term_diversity, term_challenge: avg raw components
       - vpr: valid pick rate
@@ -179,6 +182,9 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
     reward_sum = 0.0
     base_sum = 0.0
     shaping_sum = 0.0
+    base_contrib_sum = 0.0
+    mastery_sum = 0.0
+    motivation_sum = 0.0
     norm_sum = 0.0
     norm_count = 0
     improve_sum = 0.0
@@ -210,6 +216,9 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
                 # Components (optional in older envs)
                 base_sum += float(info.get("base_reward", 0.0))
                 shaping_sum += float(info.get("shaping_reward", 0.0))
+                base_contrib_sum += float(info.get("reward_base_contrib", 0.0))
+                mastery_sum += float(info.get("reward_mastery", 0.0))
+                motivation_sum += float(info.get("reward_motivation", 0.0))
                 norm_val = info.get("reward_norm", float("nan"))
                 try:
                     fv = float(norm_val)
@@ -237,6 +246,9 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
             "reward": 0.0,
             "reward_base": 0.0,
             "reward_shaping": 0.0,
+            "reward_base_contrib": 0.0,
+            "reward_mastery": 0.0,
+            "reward_motivation": 0.0,
             "reward_norm": float("nan"),
             "term_improve": 0.0,
             "term_deficit": 0.0,
@@ -253,6 +265,9 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
         "reward": reward_sum * inv_steps,
         "reward_base": base_sum * inv_steps,
         "reward_shaping": shaping_sum * inv_steps,
+        "reward_base_contrib": base_contrib_sum * inv_steps,
+        "reward_mastery": mastery_sum * inv_steps,
+        "reward_motivation": motivation_sum * inv_steps,
         # Average over steps where reward_norm was defined (denominator > 0)
         "reward_norm": (norm_sum / norm_count) if norm_count > 0 else float("nan"),
         "term_improve": improve_sum * inv_steps,
