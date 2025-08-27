@@ -491,6 +491,11 @@ class PPOTrainer(A2CTrainer):
                 
                 # Forward pass
                 logits, values = agent.network(mb_states)
+                # Check for NaN/inf and replace with zeros if found
+                if torch.isnan(logits).any() or torch.isinf(logits).any():
+                    logits = torch.zeros_like(logits)
+                # Clamp logits to prevent numerical issues
+                logits = torch.clamp(logits, min=-20, max=20)
                 dist = torch.distributions.Categorical(logits=logits)
                 
                 # PPO loss

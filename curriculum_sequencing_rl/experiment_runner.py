@@ -7,9 +7,9 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 import numpy as np
 
-from .core import Config, setup_device, set_seed, TrainerFactory
-from .environment import OptimizedInteractiveEnv, BaselinePolicies
-from .evaluation import eval_policy_interactive_metrics, print_sample_rollouts
+from core import Config, setup_device, set_seed, TrainerFactory
+from environment import OptimizedInteractiveEnv, BaselinePolicies
+from evaluation import eval_policy_interactive_metrics, print_sample_rollouts
 
 
 class ExperimentRunner:

@@ -4,7 +4,7 @@ import argparse
 import os
 from pathlib import Path
 
-from .experiment_runner import create_experiment_from_args
+from experiment_runner import create_experiment_from_args
 
 
 def create_argument_parser() -> argparse.ArgumentParser:
@@ -224,7 +224,7 @@ def main():
     
     # Load configuration from file if provided
     if args.config:
-        from .core import Config
+        from core import Config
         config = Config.from_file(args.config)
         # Override with any command line arguments
         config.update_from_args(args)
