@@ -45,6 +45,11 @@ class TrainingConfig:
     """Base training configuration."""
     episodes: int = 50
     eval_episodes: int = 300
+    # Optional cap to avoid overly long training episodes
+    train_max_steps_per_episode: Optional[int] = None
+    # Optional caps to guarantee fast evaluation/smoke tests
+    eval_max_steps_per_episode: Optional[int] = None
+    val_max_steps_per_episode: Optional[int] = None
     eval_interval: int = 5
     device: Optional[str] = None
     seed: int = 42
@@ -116,6 +121,47 @@ class PPOConfig(PolicyGradientConfig):
 
 
 @dataclass
+class SARLDQNConfig(DQNConfig):
+    """Self-adaptive DQN configuration with adaptation knobs."""
+    # Adaptation cadence
+    adapt_interval: int = 5
+
+    # Target hybrid contribution shares (sum not necessarily 1; will be normalized)
+    hybrid_base_target_share: float = 0.7
+    hybrid_mastery_target_share: float = 0.2
+    hybrid_motivation_target_share: float = 0.1
+
+    # Hybrid weight update settings
+    weight_lr: float = 0.3
+    weight_min: float = 0.0
+    weight_max: float = 3.0
+    share_tolerance: float = 0.05
+
+    # Exploration adaptation via epsilon schedule
+    invalid_rate_hi: float = 0.15
+    invalid_rate_lo: float = 0.02
+    epsilon_up_step: float = 0.05
+    epsilon_down_step: float = 0.02
+    eps_min: float = 0.01
+    eps_max: float = 1.0
+
+    # Optimizer LR adaptation
+    lr_patience: int = 5
+    lr_reduce_factor: float = 0.5
+    min_lr: float = 1e-5
+
+    # Curriculum/difficulty adaptation
+    challenge_increase_threshold: float = 0.85
+    challenge_decrease_threshold: float = 0.55
+    challenge_target_step: float = 0.05
+    challenge_target_min: float = 0.4
+    challenge_target_max: float = 0.9
+    challenge_band_step: float = -0.05  # negative narrows band when easy
+    challenge_band_min: float = 0.2
+    challenge_band_max: float = 0.6
+
+
+@dataclass
 class ExperimentConfig:
     """Complete experiment configuration."""
     environment: EnvironmentConfig
@@ -127,6 +173,7 @@ class ExperimentConfig:
     a2c: A2CConfig = field(default_factory=A2CConfig)
     a3c: A3CConfig = field(default_factory=A3CConfig)
     ppo: PPOConfig = field(default_factory=PPOConfig)
+    sarl: 'SARLDQNConfig' = field(default_factory=SARLDQNConfig)
     
     # Evaluation settings
     include_chance: bool = True
@@ -174,10 +221,13 @@ class Config:
                 model_configs[model] = A3CConfig(**model_data)
             elif model == 'ppo':
                 model_configs[model] = PPOConfig(**model_data)
+        # SARL config (optional)
+        sarl_data = data.get('sarl', {})
+        model_configs['sarl'] = SARLDQNConfig(**sarl_data)
         
         # Create experiment config
         exp_data = {k: v for k, v in data.items() 
-                   if k not in ['environment', 'q_learning', 'dqn', 'a2c', 'a3c', 'ppo']}
+                   if k not in ['environment', 'q_learning', 'dqn', 'a2c', 'a3c', 'ppo', 'sarl']}
         exp_config = ExperimentConfig(
             environment=env_config,
             **model_configs,
@@ -232,7 +282,8 @@ class Config:
             'dqn': self.config.dqn,
             'a2c': self.config.a2c,
             'a3c': self.config.a3c,
-            'ppo': self.config.ppo
+            'ppo': self.config.ppo,
+            'sarl': self.config.sarl
         }
         
         if model_name not in model_map:
@@ -247,22 +298,34 @@ class Config:
                     if not attr.startswith('_')]
         for attr in env_attrs:
             if hasattr(args, attr):
-                setattr(self.config.environment, attr, getattr(args, attr))
+                value = getattr(args, attr)
+                if value is not None:
+                    setattr(self.config.environment, attr, value)
         
         # Update model configs
-        for model_name in ['q_learning', 'dqn', 'a2c', 'a3c', 'ppo']:
+        for model_name in ['q_learning', 'dqn', 'a2c', 'a3c', 'ppo', 'sarl']:
             model_config = getattr(self.config, model_name)
             prefix = model_name.replace('_', '') if model_name != 'q_learning' else 'ql'
-            
+
             for attr in dir(model_config):
                 if not attr.startswith('_'):
                     arg_name = f"{prefix}_{attr}"
                     if hasattr(args, arg_name):
-                        setattr(model_config, attr, getattr(args, arg_name))
+                        value = getattr(args, arg_name)
+                        # Skip None to avoid overriding config values with CLI defaults
+                        if value is None:
+                            continue
+                        setattr(model_config, attr, value)
         
         # Update experiment-level settings
         exp_attrs = ['models', 'include_chance', 'include_trivial', 'include_markov',
                     'metrics_csv', 'demo', 'demo_episodes', 'demo_steps', 'demo_mode']
         for attr in exp_attrs:
             if hasattr(args, attr):
-                setattr(self.config, attr, getattr(args, attr))
+                value = getattr(args, attr)
+                if value is None:
+                    continue
+                # Special handling: allow comma-separated string for models
+                if attr == 'models' and isinstance(value, str):
+                    value = [m.strip().lower() for m in value.split(',') if m.strip()]
+                setattr(self.config, attr, value)

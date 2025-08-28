@@ -26,7 +26,7 @@ def create_argument_parser() -> argparse.ArgumentParser:
                        help="Path to preprocessed CSV data")
     parser.add_argument("--seed", type=int, default=42,
                        help="Random seed for reproducibility")
-    parser.add_argument("--models", type=str, default="ql,dqn,a2c,a3c,ppo",
+    parser.add_argument("--models", type=str, default="ql,dqn,a2c,a3c,ppo,sarl",
                        help="Comma-separated models to run")
     
     # Environment configuration
@@ -214,6 +214,103 @@ def create_argument_parser() -> argparse.ArgumentParser:
     ppo_group.add_argument("--ppo_bc_weight", type=float, default=1.0,
                           help="PPO behavior cloning weight")
     
+    # SARL parameters (Self-Adaptive DQN)
+    sarl_group = parser.add_argument_group("SARL (Self-Adaptive DQN)")
+    # Base DQN-like settings
+    sarl_group.add_argument("--sarl_episodes", type=int, default=50,
+                           help="SARL training episodes")
+    sarl_group.add_argument("--sarl_lr", type=float, default=1e-3,
+                           help="SARL learning rate")
+    sarl_group.add_argument("--sarl_gamma", type=float, default=0.99,
+                           help="SARL discount factor")
+    sarl_group.add_argument("--sarl_batch_size", type=int, default=128,
+                           help="SARL batch size")
+    sarl_group.add_argument("--sarl_buffer_size", type=int, default=20000,
+                           help="SARL replay buffer size")
+    sarl_group.add_argument("--sarl_hidden_dim", type=int, default=128,
+                           help="SARL hidden layer dimension")
+    sarl_group.add_argument("--sarl_eps_start", type=float, default=1.0,
+                           help="SARL initial epsilon")
+    sarl_group.add_argument("--sarl_eps_end", type=float, default=0.05,
+                           help="SARL final epsilon")
+    sarl_group.add_argument("--sarl_eps_decay_steps", type=int, default=20000,
+                           help="SARL epsilon decay steps")
+    sarl_group.add_argument("--sarl_target_tau", type=float, default=0.01,
+                           help="SARL target network soft update rate")
+    sarl_group.add_argument("--sarl_target_update_interval", type=int, default=1,
+                           help="SARL target network update interval")
+    sarl_group.add_argument("--sarl_select_best", dest="sarl_select_best_on_val",
+                           action="store_true", help="Enable SARL validation selection")
+    sarl_group.add_argument("--sarl_val_episodes", type=int, default=300,
+                           help="SARL validation episodes")
+    # Optional: direct control of SARL eval episodes without touching config
+    sarl_group.add_argument("--sarl_eval_episodes", type=int, default=None,
+                           help="SARL evaluation episodes (overrides config if provided)")
+    # Optional: per-episode step caps for SARL (None means use config/default)
+    sarl_group.add_argument("--sarl_eval_max_steps_per_episode", type=int, default=None,
+                           help="Max steps per evaluation episode for SARL")
+    sarl_group.add_argument("--sarl_val_max_steps_per_episode", type=int, default=None,
+                           help="Max steps per validation episode for SARL")
+    sarl_group.add_argument("--sarl_train_max_steps_per_episode", type=int, default=None,
+                           help="Max steps per training episode for SARL")
+    parser.set_defaults(sarl_select_best_on_val=False)
+    # Adaptation cadence
+    sarl_group.add_argument("--sarl_adapt_interval", type=int, default=5,
+                           help="Episodes between adaptation steps")
+    # Hybrid contribution targets
+    sarl_group.add_argument("--sarl_hybrid_base_target_share", type=float, default=0.7,
+                           help="Target share for base contribution")
+    sarl_group.add_argument("--sarl_hybrid_mastery_target_share", type=float, default=0.2,
+                           help="Target share for mastery contribution")
+    sarl_group.add_argument("--sarl_hybrid_motivation_target_share", type=float, default=0.1,
+                           help="Target share for motivation contribution")
+    # Hybrid weight update settings
+    sarl_group.add_argument("--sarl_weight_lr", type=float, default=0.3,
+                           help="Learning rate for hybrid weight updates")
+    sarl_group.add_argument("--sarl_weight_min", type=float, default=0.0,
+                           help="Minimum hybrid weight")
+    sarl_group.add_argument("--sarl_weight_max", type=float, default=3.0,
+                           help="Maximum hybrid weight")
+    sarl_group.add_argument("--sarl_share_tolerance", type=float, default=0.05,
+                           help="Tolerance for target share matching")
+    # Epsilon adaptation
+    sarl_group.add_argument("--sarl_invalid_rate_hi", type=float, default=0.15,
+                           help="Invalid action rate threshold to increase epsilon")
+    sarl_group.add_argument("--sarl_invalid_rate_lo", type=float, default=0.02,
+                           help="Invalid action rate threshold to decrease epsilon")
+    sarl_group.add_argument("--sarl_epsilon_up_step", type=float, default=0.05,
+                           help="Increment to epsilon when invalid rate is high")
+    sarl_group.add_argument("--sarl_epsilon_down_step", type=float, default=0.02,
+                           help="Decrement to epsilon when invalid rate is low")
+    sarl_group.add_argument("--sarl_eps_min", type=float, default=0.01,
+                           help="Minimum epsilon bound for adaptation")
+    sarl_group.add_argument("--sarl_eps_max", type=float, default=1.0,
+                           help="Maximum epsilon bound for adaptation")
+    # Optimizer LR adaptation
+    sarl_group.add_argument("--sarl_lr_patience", type=int, default=5,
+                           help="Episodes without improvement before reducing LR")
+    sarl_group.add_argument("--sarl_lr_reduce_factor", type=float, default=0.5,
+                           help="Factor to multiply LR by on plateau")
+    sarl_group.add_argument("--sarl_min_lr", type=float, default=1e-5,
+                           help="Minimum LR floor")
+    # Curriculum/difficulty adaptation
+    sarl_group.add_argument("--sarl_challenge_increase_threshold", type=float, default=0.85,
+                           help="Normalized performance to increase difficulty")
+    sarl_group.add_argument("--sarl_challenge_decrease_threshold", type=float, default=0.55,
+                           help="Normalized performance to decrease difficulty")
+    sarl_group.add_argument("--sarl_challenge_target_step", type=float, default=0.05,
+                           help="Step size to change challenge target")
+    sarl_group.add_argument("--sarl_challenge_target_min", type=float, default=0.4,
+                           help="Minimum challenge target")
+    sarl_group.add_argument("--sarl_challenge_target_max", type=float, default=0.9,
+                           help="Maximum challenge target")
+    sarl_group.add_argument("--sarl_challenge_band_step", type=float, default=-0.05,
+                           help="Step size to change challenge band (negative narrows)")
+    sarl_group.add_argument("--sarl_challenge_band_min", type=float, default=0.2,
+                           help="Minimum challenge band")
+    sarl_group.add_argument("--sarl_challenge_band_max", type=float, default=0.6,
+                           help="Maximum challenge band")
+    
     return parser
 
 
@@ -227,6 +324,14 @@ def main():
         from .core import Config
         config = Config.from_file(args.config)
         # Override with any command line arguments
+        # Prevent CLI defaults from overriding config-provided values
+        # Neutralize env-level defaults that would override config
+        args.seed = None
+        args.data = None
+        args.models = None
+        args.include_chance = None
+        args.include_trivial = None
+        args.include_markov = None
         config.update_from_args(args)
         experiment = create_experiment_from_args(args, config)
     else:

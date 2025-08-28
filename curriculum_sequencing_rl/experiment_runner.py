@@ -46,22 +46,41 @@ class ExperimentRunner:
         env = self.setup_environment()
         results = {}
         
-        baseline_policies = BaselinePolicies.get_all_baselines(
-            env, self.config.config.environment.seed
-        )
-        
-        # Filter baselines based on config
-        if not self.config.config.include_chance:
-            baseline_policies.pop('Chance', None)
-        if not self.config.config.include_trivial:
-            baseline_policies.pop('TrivialSame', None)
-        if not self.config.config.include_markov:
-            baseline_policies.pop('Markov1-Train', None)
-        
+        # Determine evaluation episodes and max steps for baselines from first configured model
+        eval_episodes = None
+        eval_max_steps_per_episode = None
+        for m in self.config.config.models:
+            if m in {'ql', 'dqn', 'a2c', 'a3c', 'ppo', 'sarl'}:
+                try:
+                    mc = self.config.get_model_config(m)
+                    eval_episodes = mc.eval_episodes
+                    # Optional cap to guarantee fast/hanging-proof evaluation
+                    eval_max_steps_per_episode = getattr(mc, 'eval_max_steps_per_episode', None)
+                    break
+                except Exception:
+                    pass
+        if eval_episodes is None:
+            eval_episodes = 300
+
+        # Build only requested baselines to avoid heavy precomputation (e.g., Markov)
+        baseline_policies = {}
+        if self.config.config.include_chance:
+            baseline_policies['Chance'] = BaselinePolicies.random_policy(
+                env, self.config.config.environment.seed
+            )
+        if self.config.config.include_trivial:
+            baseline_policies['TrivialSame'] = BaselinePolicies.trivial_same_policy(env)
+        if self.config.config.include_markov:
+            baseline_policies['Markov1-Train'] = BaselinePolicies.markov_policy(env)
+
+        if not baseline_policies:
+            return results
+
         for name, policy in baseline_policies.items():
             self.logger.info(f"Evaluating baseline: {name}")
             metrics = eval_policy_interactive_metrics(
-                env, policy, mode="test", episodes=self.config.config.environment.seed
+                env, policy, mode="test", episodes=eval_episodes,
+                max_steps_per_episode=eval_max_steps_per_episode
             )
             results[name] = metrics
             
@@ -101,7 +120,8 @@ class ExperimentRunner:
             # Evaluate agent
             policy = agent.get_policy(env)
             metrics = eval_policy_interactive_metrics(
-                env, policy, mode="test", episodes=model_config.eval_episodes
+                env, policy, mode="test", episodes=model_config.eval_episodes,
+                max_steps_per_episode=getattr(model_config, 'eval_max_steps_per_episode', None)
             )
             results[model_name.upper()] = metrics
             

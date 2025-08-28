@@ -124,6 +124,14 @@ class EpsilonScheduler:
         """Increment step counter."""
         self.step_count += 1
 
+    def set_epsilon(self, eps: float) -> None:
+        """Force epsilon to a fixed value by setting start and end to eps.
+        This enables dynamic adaptation of exploration during training.
+        """
+        eps = float(max(0.0, min(1.0, eps)))
+        self.start = eps
+        self.end = eps
+
 
 def setup_logging(level: str = "INFO", format_str: Optional[str] = None) -> None:
     """Setup logging configuration."""

@@ -3,6 +3,7 @@
 from .dqn_agent import DQNAgent, DQNTrainer
 from .q_learning_agent import QLearningAgent, QLearningTrainer
 from .policy_gradient_agent import PolicyGradientAgent, A2CTrainer, A3CTrainer, PPOTrainer
+from .sarl_trainer import SARLDQNTrainer
 
 __all__ = [
     'DQNAgent',
@@ -12,5 +13,6 @@ __all__ = [
     'PolicyGradientAgent',
     'A2CTrainer',
     'A3CTrainer', 
-    'PPOTrainer'
+    'PPOTrainer',
+    'SARLDQNTrainer'
 ]

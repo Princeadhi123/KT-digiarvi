@@ -107,7 +107,7 @@ def _best_remaining_immediate_reward(env: Any) -> float:
         return float("nan")
 
 
-def _run_interactive_diagnostics(env: Any, policy_fn: Callable[[Any, int], int], mode: str, episodes: int) -> Tuple[float, float, float, float]:
+def _run_interactive_diagnostics(env: Any, policy_fn: Callable[[Any, int], int], mode: str, episodes: int, max_steps_per_episode: Optional[int] = None) -> Tuple[float, float, float, float]:
     """Internal helper computing VPR, regret, regret_ratio, avg_reward."""
     total_steps = 0
     vpr_hits = 0.0
@@ -118,6 +118,7 @@ def _run_interactive_diagnostics(env: Any, policy_fn: Callable[[Any, int], int],
     for _ in range(episodes):
         state = env.reset(mode)
         done = False
+        steps = 0
         while not done:
             best_pre = _best_remaining_immediate_reward(env) if interactive_ok else float("nan")
             cur_cat = int(np.argmax(state[: env.action_size]))
@@ -136,6 +137,10 @@ def _run_interactive_diagnostics(env: Any, policy_fn: Callable[[Any, int], int],
                 if best_pre > 1e-9:
                     regret_ratio_sum += max(0.0, reg / best_pre)
             state = next_state if not done else state
+            steps += 1
+            if (max_steps_per_episode is not None) and (steps >= max_steps_per_episode):
+                # Force-terminate episode to avoid long/hanging runs
+                done = True
     avg_reward = (reward_sum / total_steps) if total_steps > 0 else 0.0
     vpr = (vpr_hits / total_steps) if total_steps > 0 else float("nan")
     avg_regret = (regret_sum / total_steps) if total_steps > 0 else float("nan")
@@ -163,7 +168,7 @@ def eval_policy_regret(env: Any, policy_fn: Callable[[Any, int], int], mode: str
     return float(avg_regret), float(avg_regret_ratio)
 
 
-def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], int], mode: str = "test", episodes: int = 200) -> dict:
+def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], int], mode: str = "test", episodes: int = 200, max_steps_per_episode: Optional[int] = None) -> dict:
     """Evaluate a policy and return a dict with shaped reward breakdown and diagnostics.
 
     Returns keys:
@@ -200,6 +205,7 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
     for _ in range(episodes):
         state = env.reset(mode)
         done = False
+        steps = 0
         while not done:
             best_pre = _best_remaining_immediate_reward(env) if interactive_ok else float("nan")
             cur_cat = int(np.argmax(state[: env.action_size]))
@@ -240,6 +246,10 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
                 if best_pre > 1e-9:
                     regret_ratio_sum += max(0.0, reg / best_pre)
             state = next_state if not done else state
+            steps += 1
+            if (max_steps_per_episode is not None) and (steps >= max_steps_per_episode):
+                # Force-terminate episode to avoid long/hanging runs
+                done = True
 
     if total_steps <= 0:
         return {
