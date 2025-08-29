@@ -55,6 +55,28 @@ class QLearningAgent(BaseAgent):
         
         return int(np.argmax(q_values))
     
+    def act_from_cat(self, current_category: int, training: bool = True,
+                     valid_ids: Optional[Any] = None) -> int:
+        """Like act(), but skip state decoding; use current category directly.
+        This avoids reconstructing state and taking argmax during offline QL training.
+        """
+        if training and self.rng.random() < self.epsilon:
+            # Random exploration
+            if valid_ids is not None and len(valid_ids) > 0:
+                return int(self.rng.choice(list(valid_ids)))
+            return int(self.rng.integers(0, self.action_dim))
+        
+        # Greedy action selection
+        q_values = self.q_table[current_category].copy()
+        
+        # Apply action masking if provided
+        if valid_ids is not None and len(valid_ids) > 0:
+            mask = np.full_like(q_values, -np.inf)
+            mask[list(valid_ids)] = 0.0
+            q_values = q_values + mask
+        
+        return int(np.argmax(q_values))
+    
     def update(self, state: int, action: int, reward: float, next_state: int) -> float:
         """Update Q-table using Q-learning rule."""
         # Q-learning update
@@ -104,44 +126,77 @@ class QLearningTrainer(BaseTrainer):
         self.config = config
         self.best_q_table = None
         self.best_score = float('-inf')
+        # Cache of offline training transitions for speed
+        self._cached_transitions = None
     
     def create_agent(self, env: Any) -> QLearningAgent:
         """Create Q-Learning agent."""
         return QLearningAgent(env.state_dim, env.action_size, self.config)
+    
+    def _cache_transitions(self, env: Any) -> None:
+        """Precompute offline training transitions once to avoid per-epoch sorting.
+        Builds a flat list of (current_cat, next_cat, next_score) tuples for all
+        consecutive pairs across training students.
+        """
+        transitions = []
+        # Sort once globally for deterministic per-student order
+        df_sorted = env.df.sort_values(["student_id", "order"])
+        for student_id in env.splits.train_students:
+            student_df = df_sorted[df_sorted["student_id"] == student_id]
+            if len(student_df) < 2:
+                continue
+            # Categories
+            cats = student_df["category_id"].astype(int).values
+            cur_cats = cats[:-1]
+            next_cats = cats[1:]
+            # Scores (default to zeros if column missing)
+            if "normalized_score" in student_df.columns:
+                scores = student_df["normalized_score"].fillna(0.0).astype(float).values
+                next_scores = scores[1:]
+            else:
+                next_scores = np.zeros(len(next_cats), dtype=float)
+            for c, n, s in zip(cur_cats, next_cats, next_scores):
+                transitions.append((int(c), int(n), float(s)))
+        self._cached_transitions = transitions
     
     def train_step(self, env: Any, agent: QLearningAgent) -> dict:
         """Execute one training epoch (pass through all students)."""
         total_loss = 0.0
         total_transitions = 0
         
-        for student_id in env.splits.train_students:
-            student_df = env.df[env.df["student_id"] == student_id].sort_values("order")
-            
-            for i in range(len(student_df) - 1):
-                current_row = student_df.iloc[i]
-                next_row = student_df.iloc[i + 1]
-                
-                current_cat = int(current_row["category_id"])
-                next_cat = int(next_row["category_id"])
-                
-                # Select action
-                current_state = env._build_state_from_row(current_row)
-                action = agent.act(current_state, training=True)
-                
-                # Compute reward (align with interactive env semantics)
+        if getattr(self, "_cached_transitions", None):
+            # Fast path: use precomputed transitions and skip state reconstruction
+            for current_cat, next_cat, next_score in self._cached_transitions:
+                action = agent.act_from_cat(current_cat, training=True)
                 if hasattr(env, "valid_action_ids"):
                     # Interactive environment: score-only reward
-                    reward = env.rw_score * float(next_row.get("normalized_score", 0.0))
+                    reward = env.rw_score * float(next_score)
                 else:
                     # Standard reward: correctness + score
                     correctness = 1.0 if action == next_cat else 0.0
-                    reward = (env.rw_correct * correctness + 
-                             env.rw_score * float(next_row.get("normalized_score", 0.0)))
-                
-                # Update Q-table
+                    reward = (env.rw_correct * correctness + env.rw_score * float(next_score))
                 loss = agent.update(current_cat, action, reward, next_cat)
                 total_loss += loss
                 total_transitions += 1
+        else:
+            # Fallback: original slow path
+            for student_id in env.splits.train_students:
+                student_df = env.df[env.df["student_id"] == student_id].sort_values("order")
+                for i in range(len(student_df) - 1):
+                    current_row = student_df.iloc[i]
+                    next_row = student_df.iloc[i + 1]
+                    current_cat = int(current_row["category_id"])
+                    next_cat = int(next_row["category_id"])
+                    current_state = env._build_state_from_row(current_row)
+                    action = agent.act(current_state, training=True)
+                    if hasattr(env, "valid_action_ids"):
+                        reward = env.rw_score * float(next_row.get("normalized_score", 0.0))
+                    else:
+                        correctness = 1.0 if action == next_cat else 0.0
+                        reward = (env.rw_correct * correctness + env.rw_score * float(next_row.get("normalized_score", 0.0)))
+                    loss = agent.update(current_cat, action, reward, next_cat)
+                    total_loss += loss
+                    total_transitions += 1
         
         return {
             'avg_loss': total_loss / max(total_transitions, 1),
@@ -152,6 +207,9 @@ class QLearningTrainer(BaseTrainer):
     def train(self, env: Any) -> QLearningAgent:
         """Main training loop for Q-Learning."""
         agent = self.create_agent(env)
+        # Precompute transitions once for speed (avoids per-epoch DataFrame sorts)
+        if getattr(self, "_cached_transitions", None) is None:
+            self._cache_transitions(env)
         
         for epoch in range(self.config.epochs):
             # Update exploration rate
