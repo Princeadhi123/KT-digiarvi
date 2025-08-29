@@ -277,6 +277,9 @@ class SARLDQNTrainer(BaseTrainer):
     # -----------------------------
     def train(self, env: Any) -> DQNAgent:
         agent = self.create_agent(env)
+        # Ensure self.agent is available during training for evaluation hooks
+        # (e.g., _evaluate_agent uses self.agent). This mirrors BaseTrainer behavior.
+        self.agent = agent
 
         for episode in range(self.config.episodes):
             metrics = self.train_step(env, agent)
@@ -299,5 +302,4 @@ class SARLDQNTrainer(BaseTrainer):
             agent.q_network.load_state_dict(self.best_agent_state)
             agent.hard_update_target()
 
-        self.agent = agent
         return agent
