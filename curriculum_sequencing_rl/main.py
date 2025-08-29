@@ -332,6 +332,28 @@ def main():
         args.include_chance = None
         args.include_trivial = None
         args.include_markov = None
+        # Environment fields: ensure CLI defaults don't clobber file values
+        args.reward_correct_w = None
+        args.reward_score_w = None
+        args.action_on = None
+        # Shaping weights
+        args.rew_improve_w = None
+        args.rew_deficit_w = None
+        args.rew_spacing_w = None
+        args.rew_diversity_w = None
+        args.rew_challenge_w = None
+        # Shaping hyperparameters
+        args.ema_alpha = None
+        args.need_threshold = None
+        args.spacing_window = None
+        args.diversity_recent_k = None
+        args.challenge_target = None
+        args.challenge_band = None
+        args.invalid_penalty = None
+        # Initial hybrid weights
+        args.hybrid_base_w = None
+        args.hybrid_mastery_w = None
+        args.hybrid_motivation_w = None
         config.update_from_args(args)
         experiment = create_experiment_from_args(args, config)
     else:

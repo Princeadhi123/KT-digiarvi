@@ -180,35 +180,53 @@ class ExperimentRunner:
             base_contrib = metrics.get('reward_base_contrib', float('nan'))
             mastery = metrics.get('reward_mastery', float('nan'))
             motivation = metrics.get('reward_motivation', float('nan'))
+
+            # Hybrid contribution percentage shares (normalized)
+            vals = np.array([base_contrib, mastery, motivation], dtype=float)
+            if np.any(np.isnan(vals)):
+                base_share, mastery_share, motivation_share = float('nan'), float('nan'), float('nan')
+            else:
+                total = float(np.sum(vals))
+                if total > 1e-9:
+                    base_share = 100.0 * (base_contrib / total)
+                    mastery_share = 100.0 * (mastery / total)
+                    motivation_share = 100.0 * (motivation / total)
+                else:
+                    base_share, mastery_share, motivation_share = float('nan'), float('nan'), float('nan')
+
+            # Percent versions for selected metrics
+            norm_pct = reward_norm * 100.0 if not np.isnan(reward_norm) else float('nan')
+            regret_ratio_pct = regret_ratio * 100.0 if not np.isnan(regret_ratio) else float('nan')
             
             print(
-                f"{name:<12}: avg_reward={reward:.3f}  base={reward_base:.3f}  "
-                f"norm={reward_norm:.3f}  vpr={vpr:.3f}  regret={regret:.3f}  "
-                f"regret_ratio={regret_ratio:.3f}  |  "
-                f"hyb_base={base_contrib:.3f}  hyb_mastery={mastery:.3f}  "
-                f"hyb_motiv={motivation:.3f}  |  "
-                f"base%={reward_base*100:.1f}  norm%={reward_norm*100:.1f}  "
-                f"vpr%={vpr*100:.1f}  regret%={regret_ratio*100:.1f}"
+                f"{name:<12}: avg_after_shaping_reward={reward:.3f}  base_reward_before_shaping={reward_base:.3f}  "
+                f"normalized_after_shaping_reward%={norm_pct:.1f}  vpr={vpr:.3f}  regret={regret:.3f}  "
+                f"regret_ratio_after_shaping%={regret_ratio_pct:.1f}  |  "
+                f"after_shaping_base_contrib={base_contrib:.3f}  after_shaping_mastery_contrib={mastery:.3f}  "
+                f"after_shaping_motivation_contrib={motivation:.3f}  |  "
+                f"after_shaping_base_share%={base_share:.1f}  after_shaping_mastery_share%={mastery_share:.1f}  "
+                f"after_shaping_motivation_share%={motivation_share:.1f}"
             )
     
     def _save_results_to_csv(self) -> None:
         """Save results to CSV file."""
         csv_path = self.config.config.metrics_csv
         
-        # Define comprehensive fieldnames
-        fieldnames = [
+        # Define comprehensive fieldnames (used when creating a new CSV)
+        default_fieldnames = [
             "timestamp", "model", "reward", "vpr", "vpr_pct", "regret", 
             "regret_ratio", "regret_ratio_pct", "seed", "env_type",
             "reward_base", "reward_shaping", "reward_norm", 
             "reward_base_pct", "reward_norm_pct",
             "reward_base_contrib", "reward_mastery", "reward_motivation",
             "reward_base_contrib_pct", "reward_mastery_pct", "reward_motivation_pct",
+            "hybrid_base_share_pct", "hybrid_mastery_share_pct", "hybrid_motivation_share_pct",
             "term_improve", "term_deficit", "term_spacing", "term_diversity", "term_challenge"
         ]
         
         # Add environment and model config fields
         env_config = self.config.config.environment
-        fieldnames.extend([
+        default_fieldnames.extend([
             "reward_correct_w", "reward_score_w", "hybrid_base_w", 
             "hybrid_mastery_w", "hybrid_motivation_w",
             "rew_improve_w", "rew_deficit_w", "rew_spacing_w", 
@@ -222,8 +240,22 @@ class ExperimentRunner:
         
         timestamp = datetime.now(timezone.utc).isoformat()
         
+        # If file exists, reuse its header to avoid column mismatch; else use default_fieldnames
+        fieldnames_to_use = None
+        if file_exists:
+            try:
+                with open(csv_path, mode='r', newline='') as rf:
+                    reader = csv.reader(rf)
+                    existing_header = next(reader)
+                    if isinstance(existing_header, list) and len(existing_header) > 0:
+                        fieldnames_to_use = existing_header
+            except Exception:
+                fieldnames_to_use = None
+        if fieldnames_to_use is None:
+            fieldnames_to_use = default_fieldnames
+
         with open(csv_path, mode='a', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
+            writer = csv.DictWriter(f, fieldnames=fieldnames_to_use, extrasaction='ignore')
             
             if not file_exists:
                 writer.writeheader()
@@ -244,12 +276,24 @@ class ExperimentRunner:
                 for base_key in ['vpr', 'regret_ratio', 'reward_base', 'reward_norm']:
                     if base_key in metrics and not np.isnan(metrics[base_key]):
                         row[f"{base_key}_pct"] = metrics[base_key] * 100.0
-                
-                # Add hybrid contribution percentages
+
+                # Add hybrid contribution percentages (absolute, not normalized)
                 for key in ['reward_base_contrib', 'reward_mastery', 'reward_motivation']:
                     if key in metrics and not np.isnan(metrics[key]):
                         row[f"{key}_pct"] = metrics[key] * 100.0
-                
+
+                # Add hybrid contribution percentage shares (normalized to sum of hybrid parts)
+                base_contrib = metrics.get('reward_base_contrib', float('nan'))
+                mastery = metrics.get('reward_mastery', float('nan'))
+                motivation = metrics.get('reward_motivation', float('nan'))
+                vals = np.array([base_contrib, mastery, motivation], dtype=float)
+                if not np.any(np.isnan(vals)):
+                    total = float(np.sum(vals))
+                    if total > 1e-9:
+                        row['hybrid_base_share_pct'] = 100.0 * (base_contrib / total)
+                        row['hybrid_mastery_share_pct'] = 100.0 * (mastery / total)
+                        row['hybrid_motivation_share_pct'] = 100.0 * (motivation / total)
+
                 # Add environment config
                 for attr in ['reward_correct_w', 'reward_score_w', 'hybrid_base_w',
                            'hybrid_mastery_w', 'hybrid_motivation_w', 'rew_improve_w',
@@ -258,7 +302,7 @@ class ExperimentRunner:
                            'spacing_window', 'diversity_recent_k', 'challenge_target',
                            'challenge_band', 'invalid_penalty']:
                     row[attr] = getattr(env_config, attr)
-                
+
                 writer.writerow(row)
         
         self.logger.info(f"Results saved to {csv_path}")
