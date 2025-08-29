@@ -73,6 +73,8 @@ class OptimizedInteractiveEnv:
         # Order normalization
         order_min, order_max = self.df["order"].min(), self.df["order"].max()
         self.df["order_norm"] = (self.df["order"] - order_min) / (order_max - order_min + 1e-9)
+        # Guard against NaNs in order_norm
+        self.df["order_norm"] = pd.to_numeric(self.df["order_norm"], errors="coerce").fillna(0.0).astype(float)
         
         # Sex encoding
         self.df["sex_bin"] = self.df["sex"].apply(self._standardize_sex)
@@ -84,6 +86,10 @@ class OptimizedInteractiveEnv:
         self.df["grade_enc"] = self.df["grade"].map(grade2id).astype(float)
         if len(grades) > 1:
             self.df["grade_enc"] /= (len(grades) - 1)
+        
+        # Ensure normalized_score is numeric and bounded; fill missing with neutral 0.5
+        self.df["normalized_score"] = pd.to_numeric(self.df["normalized_score"], errors="coerce")
+        self.df["normalized_score"] = self.df["normalized_score"].clip(lower=0.0, upper=1.0).fillna(0.5).astype(float)
         
         # Other features
         self.df["home_school_lang_match"] = self.df["home_school_lang_match"].fillna(0.5).astype(float)

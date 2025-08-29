@@ -88,6 +88,14 @@ class PolicyGradientAgent(BaseAgent):
                 mask[torch.tensor(list(valid_ids), device=self.device)] = 0.0
                 logits = logits + mask
             
+            # Sanitize logits to avoid NaN/Inf in distributions
+            if torch.isnan(logits).any() or torch.isinf(logits).any():
+                logits = torch.nan_to_num(logits, nan=0.0, posinf=20.0, neginf=-20.0)
+            logits = torch.clamp(logits, min=-20, max=20)
+            # Fallback: if all -inf after masking, use zeros to create a uniform policy
+            if torch.isneginf(logits).all():
+                logits = torch.zeros_like(logits)
+            
             if training:
                 # Sample from policy
                 dist = torch.distributions.Categorical(logits=logits)
@@ -251,6 +259,13 @@ class A2CTrainer(BaseTrainer):
                     mask[torch.tensor(valid_ids, device=agent.device)] = 0.0
                     masked_logits = logits + mask
             
+            # Sanitize logits
+            if torch.isnan(masked_logits).any() or torch.isinf(masked_logits).any():
+                masked_logits = torch.nan_to_num(masked_logits, nan=0.0, posinf=20.0, neginf=-20.0)
+            masked_logits = torch.clamp(masked_logits, min=-20, max=20)
+            if torch.isneginf(masked_logits).all():
+                masked_logits = torch.zeros_like(masked_logits)
+            
             dist = torch.distributions.Categorical(logits=masked_logits)
             action = dist.sample().item()
             
@@ -309,6 +324,10 @@ class A2CTrainer(BaseTrainer):
         
         # Forward pass
         logits, values = agent.network(states_cat)
+        # Sanitize logits
+        if torch.isnan(logits).any() or torch.isinf(logits).any():
+            logits = torch.nan_to_num(logits, nan=0.0, posinf=20.0, neginf=-20.0)
+        logits = torch.clamp(logits, min=-20, max=20)
         dist = torch.distributions.Categorical(logits=logits)
         
         # Compute losses
@@ -430,6 +449,10 @@ class PPOTrainer(A2CTrainer):
         for states, actions in zip(batch_data['states'], batch_data['actions']):
             with torch.no_grad():
                 logits, _ = agent.network(states)
+                # Sanitize logits
+                if torch.isnan(logits).any() or torch.isinf(logits).any():
+                    logits = torch.nan_to_num(logits, nan=0.0, posinf=20.0, neginf=-20.0)
+                logits = torch.clamp(logits, min=-20, max=20)
                 dist = torch.distributions.Categorical(logits=logits)
                 old_log_probs = dist.log_prob(actions)
                 batch_old_log_probs.append(old_log_probs.detach())
