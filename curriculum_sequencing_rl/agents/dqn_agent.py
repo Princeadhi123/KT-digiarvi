@@ -82,13 +82,16 @@ class DQNAgent(BaseAgent):
         # Copy weights to target network
         self.target_network.load_state_dict(self.q_network.state_dict())
         self.target_network.freeze()
+        # Ensure target network behaves deterministically (disable dropout)
+        self.target_network.eval()
         
         # Optimizer
         self.optimizer = optim.Adam(self.q_network.parameters(), lr=config.lr)
         
         # Replay buffer
+        # Keep buffer on CPU to reduce GPU memory pressure; we'll move samples per update
         self.replay_buffer = ReplayBuffer(
-            config.buffer_size, state_dim, str(self.device)
+            config.buffer_size, state_dim, device="cpu"
         )
         
         # Exploration
@@ -110,17 +113,24 @@ class DQNAgent(BaseAgent):
             return random.randrange(self.action_dim)
         
         # Greedy action selection
-        with torch.no_grad():
-            state_tensor = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
-            q_values = self.q_network(state_tensor)
-            
-            # Apply action masking if provided
-            if valid_ids is not None and len(valid_ids) > 0:
-                mask = torch.full((self.action_dim,), float('-inf'), device=self.device)
-                mask[torch.tensor(list(valid_ids), device=self.device)] = 0.0
-                q_values = q_values + mask
-            
-            return q_values.argmax().item()
+        prev_mode = self.q_network.training
+        try:
+            # Disable dropout/batchnorm for inference
+            self.q_network.train(False)
+            with torch.no_grad():
+                state_tensor = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
+                q_values = self.q_network(state_tensor)
+                
+                # Apply action masking if provided
+                if valid_ids is not None and len(valid_ids) > 0:
+                    mask = torch.full((self.action_dim,), float('-inf'), device=self.device)
+                    mask[torch.tensor(list(valid_ids), device=self.device)] = 0.0
+                    q_values = q_values + mask
+                
+                return q_values.argmax().item()
+        finally:
+            # Restore original training mode
+            self.q_network.train(prev_mode)
     
     def remember(self, state: np.ndarray, action: int, reward: float,
                  next_state: Optional[np.ndarray], done: bool) -> None:
@@ -136,18 +146,31 @@ class DQNAgent(BaseAgent):
         states, actions, rewards, next_states, dones = self.replay_buffer.sample(
             self.config.batch_size
         )
+        # Move to model device
+        states = states.to(self.device)
+        actions = actions.to(self.device)
+        rewards = rewards.to(self.device)
+        next_states = next_states.to(self.device)
+        dones = dones.to(self.device)
         
         # Current Q values
         current_q = self.q_network(states).gather(1, actions.unsqueeze(1))
         
         # Next Q values using Double DQN
         with torch.no_grad():
-            # Select actions using online network
+            # Ensure deterministic target computation (disable dropout)
+            q_prev_mode = self.q_network.training
+            self.q_network.train(False)
+            self.target_network.eval()
+            # Select actions using online network (greedy)
             next_actions = self.q_network(next_states).argmax(1, keepdim=True)
             # Evaluate using target network
             next_q = self.target_network(next_states).gather(1, next_actions)
+            # Zero out targets for terminal transitions
             next_q[dones.unsqueeze(1)] = 0.0
             target_q = rewards.unsqueeze(1) + self.config.gamma * next_q
+            # Restore online network mode
+            self.q_network.train(q_prev_mode)
         
         # Compute loss
         loss = F.smooth_l1_loss(current_q, target_q)
@@ -233,8 +256,10 @@ class DQNTrainer(BaseTrainer):
         episode_reward = 0.0
         episode_loss = 0.0
         steps = 0
+        # Respect configurable training cap to avoid runaway episodes
+        max_steps = getattr(self.config, 'train_max_steps_per_episode', None) or 1000
         
-        while not done and steps < 1000:  # Max steps per episode
+        while not done and steps < max_steps:  # Max steps per episode
             # Get valid actions if available
             valid_ids = None
             if hasattr(env, 'valid_action_ids'):

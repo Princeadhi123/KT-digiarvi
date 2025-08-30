@@ -148,6 +148,9 @@ class ReplayBuffer:
         self.rewards[self.ptr] = reward
         if next_state is not None:
             self.next_states[self.ptr] = torch.from_numpy(next_state).float()
+        else:
+            # Ensure terminal transitions do not retain stale next_state data
+            self.next_states[self.ptr].zero_()
         self.dones[self.ptr] = done
         
         self.ptr = (self.ptr + 1) % self.capacity

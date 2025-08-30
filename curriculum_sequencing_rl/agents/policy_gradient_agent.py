@@ -78,33 +78,46 @@ class PolicyGradientAgent(BaseAgent):
     def act(self, state: np.ndarray, training: bool = True, 
             valid_ids: Optional[Any] = None) -> int:
         """Select action using policy network."""
-        with torch.no_grad():
-            state_tensor = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
-            logits, _ = self.network(state_tensor)
-            
-            # Apply action masking
-            if valid_ids is not None and len(valid_ids) > 0:
-                mask = torch.full((self.action_dim,), float('-inf'), device=self.device)
-                mask[torch.tensor(list(valid_ids), device=self.device)] = 0.0
-                logits = logits + mask
-            
-            # Sanitize logits to avoid NaN/Inf in distributions
-            if torch.isnan(logits).any() or torch.isinf(logits).any():
-                logits = torch.nan_to_num(logits, nan=0.0, posinf=20.0, neginf=-20.0)
-            logits = torch.clamp(logits, min=-20, max=20)
-            # Fallback: if all -inf after masking, use zeros to create a uniform policy
-            if torch.isneginf(logits).all():
-                logits = torch.zeros_like(logits)
-            
-            if training:
-                # Sample from policy
-                dist = torch.distributions.Categorical(logits=logits)
-                action = dist.sample()
-            else:
-                # Greedy action
-                action = logits.argmax(dim=-1)
-            
-            return action.item()
+        # Ensure dropout/batchnorm behave correctly: eval for inference, train for sampling
+        prev_mode = self.network.training
+        if training:
+            self.network.train(True)
+        else:
+            self.network.train(False)  # equivalent to eval()
+
+        try:
+            with torch.no_grad():
+                state_tensor = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
+                logits, _ = self.network(state_tensor)
+                
+                # Apply action masking
+                if valid_ids is not None and len(valid_ids) > 0:
+                    mask = torch.full((self.action_dim,), float('-inf'), device=self.device)
+                    mask[torch.tensor(list(valid_ids), device=self.device)] = 0.0
+                    logits = logits + mask
+                
+                # Sanitize logits to avoid NaN/Inf in distributions
+                if torch.isnan(logits).any() or torch.isinf(logits).any():
+                    logits = torch.nan_to_num(logits, nan=0.0, posinf=20.0, neginf=-20.0)
+                logits = torch.clamp(logits, min=-20, max=20)
+                # Fallback: if all -inf after masking, use zeros to create a uniform policy
+                if torch.isneginf(logits).all():
+                    logits = torch.zeros_like(logits)
+                
+                if training:
+                    # Sample from policy
+                    dist = torch.distributions.Categorical(logits=logits)
+                    action = dist.sample()
+                else:
+                    # Greedy action
+                    action = logits.argmax(dim=-1)
+                
+                action_id = action.item()
+        finally:
+            # Restore original train/eval mode
+            self.network.train(prev_mode)
+
+        return action_id
     
     def get_policy(self, env: Optional[Any] = None) -> PolicyFunction:
         """Return policy function for evaluation."""
@@ -445,34 +458,108 @@ class PPOTrainer(A2CTrainer):
         self.config = config
     
     def _collect_batch(self, env: Any, agent: PolicyGradientAgent) -> dict:
-        """Collect batch with old log probabilities for PPO."""
-        batch_data = super()._collect_batch(env, agent)
-        
-        # Compute old log probabilities
+        """Collect batch with per-step masks and old log probabilities (masked)."""
+        batch_states, batch_actions, batch_rewards = [], [], []
+        batch_values, batch_targets, batch_masks = [], [], []
         batch_old_log_probs = []
-        for states, actions in zip(batch_data['states'], batch_data['actions']):
-            with torch.no_grad():
-                logits, _ = agent.network(states)
+
+        # Use same batch sizing logic as A2C/A3C
+        num_episodes = (
+            getattr(self.config, 'rollouts_per_update', None)
+            or getattr(self.config, 'rollouts', None)
+            or getattr(self.config, 'batch_episodes', 4)
+        )
+
+        for _ in range(num_episodes):
+            state = env.reset("train")
+            done = False
+            states, actions, rewards, values, targets, masks = [], [], [], [], [], []
+
+            while not done:
+                state_tensor = torch.from_numpy(state).float().unsqueeze(0).to(agent.device)
+                logits, value = agent.network(state_tensor)
+
+                # Build mask from current valid actions (if any)
+                valid_ids = env.valid_action_ids() if hasattr(env, 'valid_action_ids') else None
+                masked_logits = logits
+                if valid_ids is not None and len(valid_ids) > 0:
+                    mask_vec = torch.full((env.action_size,), float('-inf'), device=agent.device)
+                    mask_vec[torch.tensor(valid_ids, device=agent.device)] = 0.0
+                else:
+                    mask_vec = torch.zeros((env.action_size,), device=agent.device)
+                masked_logits = logits + mask_vec
+
                 # Sanitize logits
-                if torch.isnan(logits).any() or torch.isinf(logits).any():
-                    logits = torch.nan_to_num(logits, nan=0.0, posinf=20.0, neginf=-20.0)
-                logits = torch.clamp(logits, min=-20, max=20)
-                dist = torch.distributions.Categorical(logits=logits)
-                old_log_probs = dist.log_prob(actions)
-                batch_old_log_probs.append(old_log_probs.detach())
-        
-        batch_data['old_log_probs'] = batch_old_log_probs
-        return batch_data
+                if torch.isnan(masked_logits).any() or torch.isinf(masked_logits).any():
+                    masked_logits = torch.nan_to_num(masked_logits, nan=0.0, posinf=20.0, neginf=-20.0)
+                masked_logits = torch.clamp(masked_logits, min=-20, max=20)
+                if torch.isneginf(masked_logits).all():
+                    masked_logits = torch.zeros_like(masked_logits)
+
+                dist = torch.distributions.Categorical(logits=masked_logits)
+                action = dist.sample().item()
+
+                next_state, reward, done, info = env.step(action)
+
+                states.append(state_tensor.squeeze(0))
+                actions.append(action)
+                rewards.append(reward)
+                values.append(value.squeeze(0))
+                targets.append(int(info.get("target", 0)))
+                masks.append(mask_vec)
+
+                state = next_state if not done else state
+
+            # Tensorize episode
+            states_t = torch.stack(states)
+            actions_t = torch.tensor(actions, dtype=torch.long, device=agent.device)
+            rewards_t = torch.tensor(rewards, dtype=torch.float32, device=agent.device)
+            values_t = torch.stack(values)
+            targets_t = torch.tensor(targets, dtype=torch.long, device=agent.device)
+            masks_t = torch.stack(masks)  # [T, A]
+
+            # Old log probs under masked policy
+            with torch.no_grad():
+                logits_ep, _ = agent.network(states_t)
+                if torch.isnan(logits_ep).any() or torch.isinf(logits_ep).any():
+                    logits_ep = torch.nan_to_num(logits_ep, nan=0.0, posinf=20.0, neginf=-20.0)
+                logits_ep = torch.clamp(logits_ep, min=-20, max=20)
+                logits_ep = logits_ep + masks_t
+                all_neg_inf = torch.isneginf(logits_ep).all(dim=1)
+                if all_neg_inf.any():
+                    logits_ep[all_neg_inf] = 0.0
+                dist_ep = torch.distributions.Categorical(logits=logits_ep)
+                old_log_probs = dist_ep.log_prob(actions_t).detach()
+
+            batch_states.append(states_t)
+            batch_actions.append(actions_t)
+            batch_rewards.append(rewards_t)
+            batch_values.append(values_t)
+            batch_targets.append(targets_t)
+            batch_masks.append(masks_t)
+            batch_old_log_probs.append(old_log_probs)
+
+        return {
+            'states': batch_states,
+            'actions': batch_actions,
+            'rewards': batch_rewards,
+            'values': batch_values,
+            'targets': batch_targets,
+            'old_log_probs': batch_old_log_probs,
+            'masks': batch_masks,
+        }
     
     def _update_agent(self, agent: PolicyGradientAgent, batch_data: dict, env: Any) -> dict:
         """Update agent using PPO clipped objective."""
         # Prepare data with GAE
         all_states, all_actions, all_advantages = [], [], []
         all_returns, all_old_log_probs, all_targets = [], [], []
+        all_masks = []
         
-        for states, actions, rewards, values, targets, old_log_probs in zip(
+        for states, actions, rewards, values, targets, old_log_probs, masks in zip(
             batch_data['states'], batch_data['actions'], batch_data['rewards'],
-            batch_data['values'], batch_data['targets'], batch_data['old_log_probs']
+            batch_data['values'], batch_data['targets'], batch_data['old_log_probs'],
+            batch_data['masks']
         ):
             values_np = values.detach().squeeze(-1)
             
@@ -489,6 +576,7 @@ class PPOTrainer(A2CTrainer):
             all_returns.append(returns)
             all_old_log_probs.append(old_log_probs)
             all_targets.append(targets)
+            all_masks.append(masks)
         
         # Concatenate
         states_cat = torch.cat(all_states)
@@ -497,6 +585,7 @@ class PPOTrainer(A2CTrainer):
         returns_cat = torch.cat(all_returns)
         old_log_probs_cat = torch.cat(all_old_log_probs)
         targets_cat = torch.cat(all_targets)
+        masks_cat = torch.cat(all_masks)  # [N, action_dim]
         
         # PPO updates
         total_loss_info = {'policy_loss': 0, 'value_loss': 0, 'entropy_loss': 0, 'bc_loss': 0}
@@ -515,14 +604,18 @@ class PPOTrainer(A2CTrainer):
                 mb_returns = returns_cat[mb_indices]
                 mb_old_log_probs = old_log_probs_cat[mb_indices]
                 mb_targets = targets_cat[mb_indices]
+                mb_masks = masks_cat[mb_indices]
                 
                 # Forward pass
                 logits, values = agent.network(mb_states)
-                # Check for NaN/inf and replace with zeros if found
+                # Sanitize and apply masks
                 if torch.isnan(logits).any() or torch.isinf(logits).any():
-                    logits = torch.zeros_like(logits)
-                # Clamp logits to prevent numerical issues
+                    logits = torch.nan_to_num(logits, nan=0.0, posinf=20.0, neginf=-20.0)
                 logits = torch.clamp(logits, min=-20, max=20)
+                logits = logits + mb_masks
+                all_neg_inf = torch.isneginf(logits).all(dim=1)
+                if all_neg_inf.any():
+                    logits[all_neg_inf] = 0.0
                 dist = torch.distributions.Categorical(logits=logits)
                 
                 # PPO loss
