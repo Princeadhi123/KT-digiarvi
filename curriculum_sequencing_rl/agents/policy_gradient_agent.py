@@ -89,17 +89,18 @@ class PolicyGradientAgent(BaseAgent):
             with torch.no_grad():
                 state_tensor = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
                 logits, _ = self.network(state_tensor)
-                
-                # Apply action masking
+
+                # Sanitize raw logits first
+                if torch.isnan(logits).any() or torch.isinf(logits).any():
+                    logits = torch.nan_to_num(logits, nan=0.0, posinf=20.0, neginf=-20.0)
+                logits = torch.clamp(logits, min=-20, max=20)
+
+                # Apply action masking AFTER sanitization so invalid remain -inf
                 if valid_ids is not None and len(valid_ids) > 0:
                     mask = torch.full((self.action_dim,), float('-inf'), device=self.device)
                     mask[torch.tensor(list(valid_ids), device=self.device)] = 0.0
                     logits = logits + mask
-                
-                # Sanitize logits to avoid NaN/Inf in distributions
-                if torch.isnan(logits).any() or torch.isinf(logits).any():
-                    logits = torch.nan_to_num(logits, nan=0.0, posinf=20.0, neginf=-20.0)
-                logits = torch.clamp(logits, min=-20, max=20)
+
                 # Fallback: if all -inf after masking, use zeros to create a uniform policy
                 if torch.isneginf(logits).all():
                     logits = torch.zeros_like(logits)
@@ -266,8 +267,13 @@ class A2CTrainer(BaseTrainer):
         while not done:
             state_tensor = torch.from_numpy(state).float().unsqueeze(0).to(agent.device)
             logits, value = agent.network(state_tensor)
-            
-            # Action masking
+
+            # Sanitize raw logits before masking
+            if torch.isnan(logits).any() or torch.isinf(logits).any():
+                logits = torch.nan_to_num(logits, nan=0.0, posinf=20.0, neginf=-20.0)
+            logits = torch.clamp(logits, min=-20, max=20)
+
+            # Apply action masking after sanitization
             masked_logits = logits
             if hasattr(env, 'valid_action_ids'):
                 valid_ids = env.valid_action_ids()
@@ -275,14 +281,11 @@ class A2CTrainer(BaseTrainer):
                     mask = torch.full((env.action_size,), float('-inf'), device=agent.device)
                     mask[torch.tensor(valid_ids, device=agent.device)] = 0.0
                     masked_logits = logits + mask
-            
-            # Sanitize logits
-            if torch.isnan(masked_logits).any() or torch.isinf(masked_logits).any():
-                masked_logits = torch.nan_to_num(masked_logits, nan=0.0, posinf=20.0, neginf=-20.0)
-            masked_logits = torch.clamp(masked_logits, min=-20, max=20)
+
+            # Fallback if all actions masked
             if torch.isneginf(masked_logits).all():
                 masked_logits = torch.zeros_like(masked_logits)
-            
+
             dist = torch.distributions.Categorical(logits=masked_logits)
             action = dist.sample().item()
             
@@ -479,9 +482,13 @@ class PPOTrainer(A2CTrainer):
                 state_tensor = torch.from_numpy(state).float().unsqueeze(0).to(agent.device)
                 logits, value = agent.network(state_tensor)
 
-                # Build mask from current valid actions (if any)
+                # Sanitize raw logits first
+                if torch.isnan(logits).any() or torch.isinf(logits).any():
+                    logits = torch.nan_to_num(logits, nan=0.0, posinf=20.0, neginf=-20.0)
+                logits = torch.clamp(logits, min=-20, max=20)
+
+                # Build mask from current valid actions (if any) and apply AFTER sanitization
                 valid_ids = env.valid_action_ids() if hasattr(env, 'valid_action_ids') else None
-                masked_logits = logits
                 if valid_ids is not None and len(valid_ids) > 0:
                     mask_vec = torch.full((env.action_size,), float('-inf'), device=agent.device)
                     mask_vec[torch.tensor(valid_ids, device=agent.device)] = 0.0
@@ -489,10 +496,7 @@ class PPOTrainer(A2CTrainer):
                     mask_vec = torch.zeros((env.action_size,), device=agent.device)
                 masked_logits = logits + mask_vec
 
-                # Sanitize logits
-                if torch.isnan(masked_logits).any() or torch.isinf(masked_logits).any():
-                    masked_logits = torch.nan_to_num(masked_logits, nan=0.0, posinf=20.0, neginf=-20.0)
-                masked_logits = torch.clamp(masked_logits, min=-20, max=20)
+                # Fallback if all actions masked
                 if torch.isneginf(masked_logits).all():
                     masked_logits = torch.zeros_like(masked_logits)
 

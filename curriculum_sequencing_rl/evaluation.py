@@ -113,6 +113,8 @@ def _run_interactive_diagnostics(env: Any, policy_fn: Callable[[Any, int], int],
     vpr_hits = 0.0
     regret_sum = 0.0
     regret_ratio_sum = 0.0
+    mask_violations = 0
+    dbg_printed = 0
     reward_sum = 0.0
     interactive_ok = hasattr(env, "valid_action_ids") and hasattr(env, "_rows_by_action")
     for _ in range(episodes):
@@ -168,7 +170,8 @@ def eval_policy_regret(env: Any, policy_fn: Callable[[Any, int], int], mode: str
     return float(avg_regret), float(avg_regret_ratio)
 
 
-def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], int], mode: str = "test", episodes: int = 200, max_steps_per_episode: Optional[int] = None) -> dict:
+def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], int], mode: str = "test", episodes: int = 200, max_steps_per_episode: Optional[int] = None,
+                                    debug_first_n_steps: int = 0, debug_print: bool = False) -> dict:
     """Evaluate a policy and return a dict with shaped reward breakdown and diagnostics.
 
     Returns keys:
@@ -200,6 +203,8 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
     vpr_hits = 0.0
     regret_sum = 0.0
     regret_ratio_sum = 0.0
+    mask_violations = 0
+    dbg_printed = 0
 
     interactive_ok = hasattr(env, "valid_action_ids") and hasattr(env, "_rows_by_action")
     for _ in range(episodes):
@@ -218,7 +223,10 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
             if isinstance(info, dict):
                 # VPR
                 if "valid_action" in info:
-                    vpr_hits += 1.0 if bool(info.get("valid_action")) else 0.0
+                    is_valid = bool(info.get("valid_action"))
+                    vpr_hits += 1.0 if is_valid else 0.0
+                    if not is_valid:
+                        mask_violations += 1
                 # Components (optional in older envs)
                 base_sum += float(info.get("base_reward", 0.0))
                 shaping_sum += float(info.get("shaping_reward", 0.0))
@@ -238,6 +246,18 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
                 spacing_sum += float(info.get("spacing", 0.0))
                 diversity_sum += float(info.get("diversity", 0.0))
                 challenge_sum += float(info.get("challenge", 0.0))
+
+                # Optional debug print of first N steps
+                if debug_print and (dbg_printed < debug_first_n_steps):
+                    try:
+                        valid_ids_dbg = list(env.valid_action_ids()) if hasattr(env, "valid_action_ids") else None
+                    except Exception:
+                        valid_ids_dbg = None
+                    print(
+                        f"[DEBUG] step={total_steps} best_pre={best_pre:.3f} valid_ids={valid_ids_dbg} picked={action} "
+                        f"valid={int(info.get('valid_action', -1))} reward={reward:.3f}"
+                    )
+                    dbg_printed += 1
 
             # Regret
             if not np.isnan(best_pre):
@@ -268,6 +288,8 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
             "vpr": float("nan"),
             "regret": float("nan"),
             "regret_ratio": float("nan"),
+            "mask_violations": 0,
+            "mask_violation_rate": float("nan"),
         }
 
     inv_steps = 1.0 / float(total_steps)
@@ -288,4 +310,6 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
         "vpr": vpr_hits * inv_steps,
         "regret": regret_sum * inv_steps,
         "regret_ratio": regret_ratio_sum * inv_steps,
+        "mask_violations": float(mask_violations),
+        "mask_violation_rate": (float(mask_violations) * inv_steps),
     }

@@ -175,6 +175,8 @@ class ExperimentRunner:
             vpr = metrics.get('vpr', float('nan'))
             regret = metrics.get('regret', float('nan'))
             regret_ratio = metrics.get('regret_ratio', float('nan'))
+            mask_violation_rate = metrics.get('mask_violation_rate', float('nan'))
+            mask_violations = metrics.get('mask_violations', float('nan'))
             
             # Hybrid contributions
             base_contrib = metrics.get('reward_base_contrib', float('nan'))
@@ -198,10 +200,12 @@ class ExperimentRunner:
             norm_pct = reward_norm * 100.0 if not np.isnan(reward_norm) else float('nan')
             regret_ratio_pct = regret_ratio * 100.0 if not np.isnan(regret_ratio) else float('nan')
             
+            mv_pct_txt = f" mask_violation_rate%={mask_violation_rate*100.0:.2f} mask_violations={int(mask_violations)}" \
+                if not np.isnan(mask_violation_rate) else ""
             print(
                 f"{name:<12}: avg_after_shaping_reward={reward:.3f}  base_reward_before_shaping={reward_base:.3f}  "
                 f"normalized_after_shaping_reward%={norm_pct:.1f}  vpr={vpr:.3f}  regret={regret:.3f}  "
-                f"regret_ratio_after_shaping%={regret_ratio_pct:.1f}  |  "
+                f"regret_ratio_after_shaping%={regret_ratio_pct:.1f}{mv_pct_txt}  |  "
                 f"after_shaping_base_contrib={base_contrib:.3f}  after_shaping_mastery_contrib={mastery:.3f}  "
                 f"after_shaping_motivation_contrib={motivation:.3f}  |  "
                 f"after_shaping_base_share%={base_share:.1f}  after_shaping_mastery_share%={mastery_share:.1f}  "
@@ -221,6 +225,7 @@ class ExperimentRunner:
             "reward_base_contrib", "reward_mastery", "reward_motivation",
             "reward_base_contrib_pct", "reward_mastery_pct", "reward_motivation_pct",
             "hybrid_base_share_pct", "hybrid_mastery_share_pct", "hybrid_motivation_share_pct",
+            "mask_violations", "mask_violation_rate",
             "term_improve", "term_deficit", "term_spacing", "term_diversity", "term_challenge"
         ]
         
