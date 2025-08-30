@@ -222,7 +222,11 @@ class A2CTrainer(BaseTrainer):
         batch_values, batch_targets = [], []
         
         # Use rollouts for A3C, batch_episodes for A2C
-        num_episodes = getattr(self.config, 'rollouts', getattr(self.config, 'batch_episodes', 4))
+        num_episodes = (
+            getattr(self.config, 'rollouts_per_update', None)
+            or getattr(self.config, 'rollouts', None)
+            or getattr(self.config, 'batch_episodes', 4)
+        )
         for _ in range(num_episodes):
             states, actions, rewards, values, targets = self._collect_episode(env, agent)
             batch_states.append(states)

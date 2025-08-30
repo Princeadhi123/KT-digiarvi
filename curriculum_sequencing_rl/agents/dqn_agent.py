@@ -281,6 +281,8 @@ class DQNTrainer(BaseTrainer):
     def train(self, env: Any) -> DQNAgent:
         """Main training loop with improvements."""
         agent = self.create_agent(env)
+        # Ensure self.agent is available for evaluation callbacks during training
+        self.agent = agent
         
         for episode in range(self.config.episodes):
             metrics = self.train_step(env, agent)

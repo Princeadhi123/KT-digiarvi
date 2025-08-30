@@ -316,6 +316,27 @@ class Config:
                         if value is None:
                             continue
                         setattr(model_config, attr, value)
+
+            # Handle known CLI-to-config alias mismatches for PG families and PPO
+            # - bc_warmup (CLI) -> bc_warmup_epochs (config)
+            # - a3c_rollouts (CLI) -> rollouts_per_update (config)
+            # - ppo_epochs (CLI) -> ppo_epochs (config) without double prefix
+            if model_name in ['a2c', 'a3c', 'ppo']:
+                alias_arg = f"{prefix}_bc_warmup"
+                if hasattr(args, alias_arg):
+                    value = getattr(args, alias_arg)
+                    if value is not None:
+                        setattr(model_config, 'bc_warmup_epochs', value)
+            if model_name == 'a3c':
+                if hasattr(args, 'a3c_rollouts'):
+                    value = getattr(args, 'a3c_rollouts')
+                    if value is not None:
+                        setattr(model_config, 'rollouts_per_update', value)
+            if model_name == 'ppo':
+                if hasattr(args, 'ppo_epochs'):
+                    value = getattr(args, 'ppo_epochs')
+                    if value is not None:
+                        setattr(model_config, 'ppo_epochs', value)
         
         # Update experiment-level settings
         exp_attrs = ['models', 'include_chance', 'include_trivial', 'include_markov',
@@ -329,3 +350,9 @@ class Config:
                 if attr == 'models' and isinstance(value, str):
                     value = [m.strip().lower() for m in value.split(',') if m.strip()]
                 setattr(self.config, attr, value)
+
+        # Optional global override for evaluation episodes across all models
+        if hasattr(args, 'eval_episodes') and getattr(args, 'eval_episodes') is not None:
+            for model_name in ['q_learning', 'dqn', 'a2c', 'a3c', 'ppo', 'sarl']:
+                model_config = getattr(self.config, model_name)
+                setattr(model_config, 'eval_episodes', getattr(args, 'eval_episodes'))
