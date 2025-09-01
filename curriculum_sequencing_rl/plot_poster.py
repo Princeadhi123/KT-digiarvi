@@ -39,6 +39,20 @@ plt.rcParams.update({
     "ytick.labelsize": 11,
 })
 
+# Default theme color (green). Can be overridden via --theme_hex
+DEFAULT_THEME_HEX = "#006A4E"
+THEME_HEX = DEFAULT_THEME_HEX
+
+def _safe_theme(hex_str: str) -> str:
+    try:
+        s = str(hex_str).strip()
+        if s.startswith("#") and len(s) == 7:
+            int(s[1:], 16)
+            return s
+    except Exception:
+        pass
+    return DEFAULT_THEME_HEX
+
 MODEL_ORDER = ["QL", "DQN", "A2C", "A3C", "PPO", "SARL"]
 MODEL_COLORS: Dict[str, str] = {
     "QL": "#4c78a8",
@@ -116,23 +130,21 @@ def _select_per_model(df: pd.DataFrame, models: List[str], strategy: str = "late
 
 def _compute_derived_fields(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    # Percent fields if absent
-    if "vpr" in df.columns and "vpr_pct" not in df.columns:
+    # Percent fields — always recompute from raw to prevent stale CSV values
+    if "vpr" in df.columns:
         df["vpr_pct"] = df["vpr"].astype(float) * 100.0
-    if "regret_ratio" in df.columns and "regret_ratio_pct" not in df.columns:
+    if "regret_ratio" in df.columns:
         df["regret_ratio_pct"] = df["regret_ratio"].astype(float) * 100.0
-    if "reward_norm" in df.columns and "reward_norm_pct" not in df.columns:
+    if "reward_norm" in df.columns:
         df["reward_norm_pct"] = df["reward_norm"].astype(float) * 100.0
-    if "reward_base" in df.columns and "reward_base_pct" not in df.columns:
+    if "reward_base" in df.columns:
         df["reward_base_pct"] = df["reward_base"].astype(float) * 100.0
 
-    # Hybrid share pct, compute if missing and parts exist
+    # Hybrid share pct — recompute when parts exist
     has_parts = all(c in df.columns for c in [
         "reward_base_contrib", "reward_mastery", "reward_motivation"
     ])
-    if has_parts and not all(c in df.columns for c in [
-        "hybrid_base_share_pct", "hybrid_mastery_share_pct", "hybrid_motivation_share_pct"
-    ]):
+    if has_parts:
         total = (
             df["reward_base_contrib"].astype(float)
             + df["reward_mastery"].astype(float)
@@ -178,13 +190,10 @@ def plot_reward_bar(df: pd.DataFrame, outdir: Path) -> None:
         data=df,
         x="model",
         y="reward",
-        hue="model",
-        dodge=False,
-        legend=False,
-        palette=[MODEL_COLORS.get(m, "#999999") for m in df["model"].astype(str)],
+        color=THEME_HEX,
         ax=ax,
     )
-    ax.set_title("Average Shaped Reward (Test)")
+    ax.set_title("Average Shaped Reward (Test)", color=THEME_HEX)
     ax.set_xlabel("")
     ax.set_ylabel("Avg reward")
     ax.margins(y=0.15)
@@ -206,13 +215,10 @@ def plot_vpr_bar(df: pd.DataFrame, outdir: Path) -> None:
         data=df,
         x="model",
         y=col,
-        hue="model",
-        dodge=False,
-        legend=False,
-        palette=[MODEL_COLORS.get(m, "#999999") for m in df["model"].astype(str)],
+        color=THEME_HEX,
         ax=ax,
     )
-    ax.set_title("Valid Pick Rate (VPR)")
+    ax.set_title("Valid Pick Rate (VPR)", color=THEME_HEX)
     ax.set_xlabel("")
     ax.set_ylabel("VPR (%)" if col.endswith("pct") else "VPR")
     fmt = "{:.1f}%" if col.endswith("pct") else "{:.3f}"
@@ -234,13 +240,10 @@ def plot_regret_ratio_bar(df: pd.DataFrame, outdir: Path) -> None:
         data=df,
         x="model",
         y=col,
-        hue="model",
-        dodge=False,
-        legend=False,
-        palette=[MODEL_COLORS.get(m, "#999999") for m in df["model"].astype(str)],
+        color=THEME_HEX,
         ax=ax,
     )
-    ax.set_title("Instantaneous Regret Ratio (Lower is better)")
+    ax.set_title("Regret Ratio", color=THEME_HEX)
     ax.set_xlabel("")
     ax.set_ylabel("Regret ratio (%)" if col.endswith("pct") else "Regret ratio")
     # Two-decimal formatting for both annotations and y-axis ticks
@@ -267,38 +270,39 @@ def plot_hybrid_shares(df: pd.DataFrame, outdir: Path) -> None:
 
     x = np.arange(len(labels))
     width = 0.6
-    p1 = ax.bar(x, base, width, label="Base", color="#4e79a7")
-    p2 = ax.bar(x, mast, width, bottom=base, label="Mastery", color="#59a14f")
-    p3 = ax.bar(x, motiv, width, bottom=base+mast, label="Motivation", color="#f28e2b")
+    # Use monotone theme palette for stacked bars
+    stack_pal = sns.light_palette(THEME_HEX, n_colors=3, reverse=False)
+    p1 = ax.bar(x, base, width, label="Short Term Gain", color=stack_pal[2])
+    p2 = ax.bar(x, mast, width, bottom=base, label="Mastery", color=stack_pal[1])
+    p3 = ax.bar(x, motiv, width, bottom=base+mast, label="Motivation", color=stack_pal[0])
 
-    ax.set_title("Hybrid Contribution Shares (%)")
+    ax.set_title("Contribution Shares (%)", color=THEME_HEX)
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.set_ylabel("Share (%)")
     ax.margins(y=0.12)
     ax.legend(
-        ncol=1,
-        loc="upper left",
-        bbox_to_anchor=(1.02, 1.0),
-        borderaxespad=0.0,
+        ncol=3,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.0),
         frameon=False,
     )
+    # Keep only horizontal gridlines (remove vertical lines)
+    try:
+        ax.set_axisbelow(True)
+        # Robustly disable vertical gridlines across Matplotlib versions
+        ax.grid(False, axis="x")
+        ax.xaxis.grid(False)
+        # Keep a subtle horizontal grid
+        ax.grid(True, axis="y", alpha=0.25)
+        ax.yaxis.grid(True)
+    except Exception:
+        pass
 
-    # Annotate totals to 100%
-    for i in range(len(labels)):
-        total = base[i] + mast[i] + motiv[i]
-        ax.annotate(
-            f"{total:.0f}%",
-            (x[i], total),
-            ha="center",
-            va="bottom",
-            xytext=(0, 2),
-            textcoords="offset points",
-            clip_on=False,
-        )
+    # Removed total=100% annotations per request
 
     sns.despine()
-    fig.tight_layout(rect=[0, 0, 0.8, 1])
+    fig.tight_layout()
     fig.savefig(outdir / "poster_hybrid_shares_stacked.png", dpi=300)
     plt.close(fig)
 
@@ -312,8 +316,9 @@ def plot_shaping_terms(df: pd.DataFrame, outdir: Path) -> None:
     # Melt for grouped bar plot
     dd = df.melt(id_vars=["model"], value_vars=avail, var_name="term", value_name="avg_value")
     fig, ax = plt.subplots(figsize=(10, 4.8))
-    sns.barplot(data=dd, x="model", y="avg_value", hue="term", ax=ax)
-    ax.set_title("Shaping Components (average per step)")
+    term_pal = sns.light_palette(THEME_HEX, n_colors=len(avail), reverse=False)
+    sns.barplot(data=dd, x="model", y="avg_value", hue="term", palette=term_pal, ax=ax)
+    ax.set_title("Shaping Components (average per step)", color=THEME_HEX)
     ax.set_xlabel("")
     ax.set_ylabel("Avg component value")
     ax.margins(y=0.12)
@@ -358,6 +363,8 @@ def parse_args() -> argparse.Namespace:
                    help="Comma-separated models to include.")
     p.add_argument("--select", type=str, default="latest", choices=["latest", "max_reward", "min_regret"],
                    help="How to select one row per model when multiple exist.")
+    p.add_argument("--theme_hex", type=str, default=DEFAULT_THEME_HEX,
+                   help="Base hex color for plots, e.g., #006A4E")
     return p.parse_args()
 
 
@@ -368,6 +375,10 @@ def main() -> None:
 
     csv_paths = [Path(s) for s in args.csvs]
     models = [m.strip().upper() for m in args.models.split(",") if m.strip()]
+
+    # Set theme color globally
+    global THEME_HEX
+    THEME_HEX = _safe_theme(getattr(args, "theme_hex", DEFAULT_THEME_HEX))
 
     df_all = _read_csvs(csv_paths)
     df_all = _compute_derived_fields(df_all)
