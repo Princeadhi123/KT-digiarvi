@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mtick
 
 # Global style for poster-quality figures
 sns.set_theme(style="whitegrid")
@@ -164,6 +165,7 @@ def _annotate_bars(ax: plt.Axes, fmt: str = "{:.2f}", dy: float = 0.01) -> None:
             va="bottom",
             xytext=(0, max(dy, 0.005)),
             textcoords="offset points",
+            clip_on=False,
         )
 
 
@@ -172,11 +174,20 @@ def plot_reward_bar(df: pd.DataFrame, outdir: Path) -> None:
         print("[INFO] Skipping reward bar (no 'reward' column)")
         return
     fig, ax = plt.subplots(figsize=(8, 4.5))
-    sns.barplot(data=df, x="model", y="reward", hue=None,
-                palette=[MODEL_COLORS.get(m, "#999999") for m in df["model"].astype(str)], ax=ax)
+    sns.barplot(
+        data=df,
+        x="model",
+        y="reward",
+        hue="model",
+        dodge=False,
+        legend=False,
+        palette=[MODEL_COLORS.get(m, "#999999") for m in df["model"].astype(str)],
+        ax=ax,
+    )
     ax.set_title("Average Shaped Reward (Test)")
     ax.set_xlabel("")
     ax.set_ylabel("Avg reward")
+    ax.margins(y=0.15)
     _annotate_bars(ax, fmt="{:.3f}")
     sns.despine()
     fig.tight_layout()
@@ -191,11 +202,21 @@ def plot_vpr_bar(df: pd.DataFrame, outdir: Path) -> None:
         return
     fig, ax = plt.subplots(figsize=(8, 4.5))
     y = df[col]
-    sns.barplot(data=df, x="model", y=col, palette=[MODEL_COLORS.get(m, "#999999") for m in df["model"].astype(str)], ax=ax)
+    sns.barplot(
+        data=df,
+        x="model",
+        y=col,
+        hue="model",
+        dodge=False,
+        legend=False,
+        palette=[MODEL_COLORS.get(m, "#999999") for m in df["model"].astype(str)],
+        ax=ax,
+    )
     ax.set_title("Valid Pick Rate (VPR)")
     ax.set_xlabel("")
     ax.set_ylabel("VPR (%)" if col.endswith("pct") else "VPR")
     fmt = "{:.1f}%" if col.endswith("pct") else "{:.3f}"
+    ax.margins(y=0.15)
     _annotate_bars(ax, fmt=fmt)
     sns.despine()
     fig.tight_layout()
@@ -209,11 +230,23 @@ def plot_regret_ratio_bar(df: pd.DataFrame, outdir: Path) -> None:
         print("[INFO] Skipping regret ratio bar (no 'regret_ratio' column)")
         return
     fig, ax = plt.subplots(figsize=(8, 4.5))
-    sns.barplot(data=df, x="model", y=col, palette=[MODEL_COLORS.get(m, "#999999") for m in df["model"].astype(str)], ax=ax)
+    sns.barplot(
+        data=df,
+        x="model",
+        y=col,
+        hue="model",
+        dodge=False,
+        legend=False,
+        palette=[MODEL_COLORS.get(m, "#999999") for m in df["model"].astype(str)],
+        ax=ax,
+    )
     ax.set_title("Instantaneous Regret Ratio (Lower is better)")
     ax.set_xlabel("")
     ax.set_ylabel("Regret ratio (%)" if col.endswith("pct") else "Regret ratio")
-    fmt = "{:.1f}%" if col.endswith("pct") else "{:.3f}"
+    # Two-decimal formatting for both annotations and y-axis ticks
+    fmt = "{:.2f}%" if col.endswith("pct") else "{:.2f}"
+    ax.yaxis.set_major_formatter(mtick.FormatStrFormatter('%.2f'))
+    ax.margins(y=0.15)
     _annotate_bars(ax, fmt=fmt)
     sns.despine()
     fig.tight_layout()
@@ -242,15 +275,30 @@ def plot_hybrid_shares(df: pd.DataFrame, outdir: Path) -> None:
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.set_ylabel("Share (%)")
-    ax.legend(ncol=3, loc="upper right")
+    ax.margins(y=0.12)
+    ax.legend(
+        ncol=1,
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1.0),
+        borderaxespad=0.0,
+        frameon=False,
+    )
 
     # Annotate totals to 100%
     for i in range(len(labels)):
         total = base[i] + mast[i] + motiv[i]
-        ax.annotate(f"{total:.0f}%", (x[i], total), ha="center", va="bottom", xytext=(0, 2), textcoords="offset points")
+        ax.annotate(
+            f"{total:.0f}%",
+            (x[i], total),
+            ha="center",
+            va="bottom",
+            xytext=(0, 2),
+            textcoords="offset points",
+            clip_on=False,
+        )
 
     sns.despine()
-    fig.tight_layout()
+    fig.tight_layout(rect=[0, 0, 0.8, 1])
     fig.savefig(outdir / "poster_hybrid_shares_stacked.png")
     plt.close(fig)
 
@@ -268,9 +316,17 @@ def plot_shaping_terms(df: pd.DataFrame, outdir: Path) -> None:
     ax.set_title("Shaping Components (average per step)")
     ax.set_xlabel("")
     ax.set_ylabel("Avg component value")
-    ax.legend(title="Term", ncol=min(5, len(avail)), loc="upper right")
+    ax.margins(y=0.12)
+    ax.legend(
+        title="Term",
+        ncol=1,
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1.0),
+        borderaxespad=0.0,
+        frameon=False,
+    )
     sns.despine()
-    fig.tight_layout()
+    fig.tight_layout(rect=[0, 0, 0.8, 1])
     fig.savefig(outdir / "poster_shaping_terms.png")
     plt.close(fig)
 
