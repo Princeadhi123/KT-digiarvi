@@ -3,7 +3,7 @@
 Usage:
   python -m curriculum_sequencing_rl.plot_poster \
     --csv "path/to/metrics1.csv" --csv "path/to/metrics2.csv" \
-    --outdir "c:/Users/you/Desktop/KT digiarvi/eda_outputs/poster" \
+    --outdir "c:/Users/you/Desktop/KT digiarvi/curriculum_sequencing_rl/poster" \
     --models ql,dqn,a2c,a3c,ppo,sarl --select latest
 
 It expects CSV(s) produced by ExperimentRunner._save_results_to_csv(),
@@ -191,7 +191,7 @@ def plot_reward_bar(df: pd.DataFrame, outdir: Path) -> None:
     _annotate_bars(ax, fmt="{:.3f}")
     sns.despine()
     fig.tight_layout()
-    fig.savefig(outdir / "poster_reward_bar.png")
+    fig.savefig(outdir / "poster_reward_bar.png", dpi=300)
     plt.close(fig)
 
 
@@ -220,7 +220,7 @@ def plot_vpr_bar(df: pd.DataFrame, outdir: Path) -> None:
     _annotate_bars(ax, fmt=fmt)
     sns.despine()
     fig.tight_layout()
-    fig.savefig(outdir / "poster_vpr_bar.png")
+    fig.savefig(outdir / "poster_vpr_bar.png", dpi=300)
     plt.close(fig)
 
 
@@ -250,7 +250,7 @@ def plot_regret_ratio_bar(df: pd.DataFrame, outdir: Path) -> None:
     _annotate_bars(ax, fmt=fmt)
     sns.despine()
     fig.tight_layout()
-    fig.savefig(outdir / "poster_regret_ratio_bar.png")
+    fig.savefig(outdir / "poster_regret_ratio_bar.png", dpi=300)
     plt.close(fig)
 
 
@@ -299,7 +299,7 @@ def plot_hybrid_shares(df: pd.DataFrame, outdir: Path) -> None:
 
     sns.despine()
     fig.tight_layout(rect=[0, 0, 0.8, 1])
-    fig.savefig(outdir / "poster_hybrid_shares_stacked.png")
+    fig.savefig(outdir / "poster_hybrid_shares_stacked.png", dpi=300)
     plt.close(fig)
 
 
@@ -327,7 +327,7 @@ def plot_shaping_terms(df: pd.DataFrame, outdir: Path) -> None:
     )
     sns.despine()
     fig.tight_layout(rect=[0, 0, 0.8, 1])
-    fig.savefig(outdir / "poster_shaping_terms.png")
+    fig.savefig(outdir / "poster_shaping_terms.png", dpi=300)
     plt.close(fig)
 
 
@@ -348,7 +348,8 @@ def generate_all_plots(df: pd.DataFrame, outdir: Path) -> List[Path]:
 
 def parse_args() -> argparse.Namespace:
     here = Path(__file__).resolve()
-    default_outdir = here.parents[1] / "eda_outputs" / "poster"
+    # Default to a 'poster' folder inside curriculum_sequencing_rl
+    default_outdir = here.parent / "poster"
     p = argparse.ArgumentParser(description="Generate poster-ready plots for RL models.")
     p.add_argument("--csv", dest="csvs", action="append", required=True,
                    help="Path to a metrics CSV. Provide multiple --csv to merge.")
