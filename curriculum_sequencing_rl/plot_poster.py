@@ -186,16 +186,26 @@ def plot_reward_bar(df: pd.DataFrame, outdir: Path) -> None:
         print("[INFO] Skipping reward bar (no 'reward' column)")
         return
     fig, ax = plt.subplots(figsize=(8, 4.5))
+    n = df["model"].nunique() if "model" in df.columns else len(df)
+    # Darker monotone variations around the theme; avoid extremes
+    pal_full = sns.dark_palette(THEME_HEX, n_colors=max(n + 2, 3), reverse=False)
+    pal = pal_full[1:-1] if n >= 2 else pal_full
     sns.barplot(
         data=df,
         x="model",
         y="reward",
-        color=THEME_HEX,
+        hue="model",
+        palette=pal,
+        dodge=False,
         ax=ax,
     )
-    ax.set_title("Average Shaped Reward (Test)", color=THEME_HEX)
+    # Remove legend introduced by hue mapping
+    leg = ax.get_legend()
+    if leg is not None:
+        leg.remove()
+    ax.set_title("Average Reward", color=THEME_HEX)
     ax.set_xlabel("")
-    ax.set_ylabel("Avg reward")
+    ax.set_ylabel("Average Reward")
     ax.margins(y=0.15)
     _annotate_bars(ax, fmt="{:.3f}")
     sns.despine()
@@ -236,16 +246,26 @@ def plot_regret_ratio_bar(df: pd.DataFrame, outdir: Path) -> None:
         print("[INFO] Skipping regret ratio bar (no 'regret_ratio' column)")
         return
     fig, ax = plt.subplots(figsize=(8, 4.5))
+    n = df["model"].nunique() if "model" in df.columns else len(df)
+    # Darker monotone variations around the theme; avoid extremes
+    pal_full = sns.dark_palette(THEME_HEX, n_colors=max(n + 2, 3), reverse=False)
+    pal = pal_full[1:-1] if n >= 2 else pal_full
     sns.barplot(
         data=df,
         x="model",
         y=col,
-        color=THEME_HEX,
+        hue="model",
+        palette=pal,
+        dodge=False,
         ax=ax,
     )
+    # Remove legend introduced by hue mapping
+    leg = ax.get_legend()
+    if leg is not None:
+        leg.remove()
     ax.set_title("Regret Ratio", color=THEME_HEX)
     ax.set_xlabel("")
-    ax.set_ylabel("Regret ratio (%)" if col.endswith("pct") else "Regret ratio")
+    ax.set_ylabel("Regret Ratio (%)" if col.endswith("pct") else "Regret ratio")
     # Two-decimal formatting for both annotations and y-axis ticks
     fmt = "{:.2f}%" if col.endswith("pct") else "{:.2f}"
     ax.yaxis.set_major_formatter(mtick.FormatStrFormatter('%.2f'))
@@ -273,8 +293,8 @@ def plot_hybrid_shares(df: pd.DataFrame, outdir: Path) -> None:
     # Use monotone theme palette for stacked bars
     stack_pal = sns.light_palette(THEME_HEX, n_colors=3, reverse=False)
     p1 = ax.bar(x, base, width, label="Short Term Gain", color=stack_pal[2])
-    p2 = ax.bar(x, mast, width, bottom=base, label="Mastery", color=stack_pal[1])
-    p3 = ax.bar(x, motiv, width, bottom=base+mast, label="Motivation", color=stack_pal[0])
+    p2 = ax.bar(x, mast, width, bottom=base, label="Knowledge Growth", color=stack_pal[1])
+    p3 = ax.bar(x, motiv, width, bottom=base+mast, label="Curiosity & Challenge", color=stack_pal[0])
 
     ax.set_title("Contribution Shares (%)", color=THEME_HEX)
     ax.set_xticks(x)
@@ -299,7 +319,45 @@ def plot_hybrid_shares(df: pd.DataFrame, outdir: Path) -> None:
     except Exception:
         pass
 
-    # Removed total=100% annotations per request
+    # Annotate each stacked segment (no % sign)
+    label_min = 3.0  # skip very small slices
+    for i, (r1, r2, r3) in enumerate(zip(p1, p2, p3)):
+        # Base segment (dark) — white text
+        h1 = r1.get_height()
+        if not np.isnan(h1) and h1 >= label_min:
+            ax.text(
+                r1.get_x() + r1.get_width() / 2.0,
+                h1 / 2.0,
+                f"{base[i]:.2f}",
+                ha="center",
+                va="center",
+                color="white",
+                fontsize=9,
+            )
+        # Mastery segment (mid) — dark text
+        h2 = r2.get_height()
+        if not np.isnan(h2) and h2 >= label_min:
+            ax.text(
+                r2.get_x() + r2.get_width() / 2.0,
+                base[i] + h2 / 2.0,
+                f"{mast[i]:.2f}",
+                ha="center",
+                va="center",
+                color="#1a1a1a",
+                fontsize=9,
+            )
+        # Motivation segment (light) — dark text
+        h3 = r3.get_height()
+        if not np.isnan(h3) and h3 >= label_min:
+            ax.text(
+                r3.get_x() + r3.get_width() / 2.0,
+                base[i] + mast[i] + h3 / 2.0,
+                f"{motiv[i]:.2f}",
+                ha="center",
+                va="center",
+                color="#1a1a1a",
+                fontsize=9,
+            )
 
     sns.despine()
     fig.tight_layout()
