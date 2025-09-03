@@ -87,4 +87,4 @@ evaluate_scalability: false
 evaluate_adaptability: false
 
 # Output CSV (separate file for this quick check)
-metrics_csv: "sarl_quick_no_stepcap_s060.csv"
+metrics_csv: "sarl_quick.csv"
