@@ -1,0 +1,99 @@
+environment:
+  data_path: "preprocessed_kt_data.csv"
+  reward_correct_w: 0.0
+  reward_score_w: 1.0
+  # Hybrid weights
+  hybrid_base_w: 1.0
+  hybrid_mastery_w: 1.0
+  hybrid_motivation_w: 1.0
+  # Multi-objective shaping weights
+  rew_improve_w: 0.35
+  rew_deficit_w: 0.35
+  rew_spacing_w: 0.10
+  rew_diversity_w: 0.05
+  rew_challenge_w: 0.15
+  # Shaping hyperparameters
+  ema_alpha: 0.3
+  need_threshold: 0.6
+  spacing_window: 16
+  diversity_recent_k: 10
+  challenge_target: 0.7
+  challenge_band: 0.4
+  invalid_penalty: -0.1
+  seed: 123
+
+# Run a fast multi-model smoke to validate cross-model normalization
+models: ["ql", "dqn", "a2c", "ppo"]
+
+# Q-Learning configuration
+q_learning:
+  epochs: 5
+  alpha: 0.2
+  gamma: 0.9
+  eps_start: 0.3
+  eps_end: 0.0
+  eps_decay_epochs: 3
+  select_best_on_val: true
+  val_episodes: 300
+
+# DQN configuration (keys align to DQNConfig dataclass)
+dqn:
+  episodes: 30
+  lr: 0.001
+  gamma: 0.99
+  batch_size: 128
+  buffer_size: 20000
+  hidden_dim: 128
+  eps_start: 1.0
+  eps_end: 0.05
+  eps_decay_steps: 10000
+  target_tau: 0.01
+  target_update_interval: 1
+  select_best_on_val: false
+  val_episodes: 300
+
+# A2C configuration (keys align to A2CConfig/PolicyGradientConfig)
+a2c:
+  episodes: 30
+  lr: 0.001
+  entropy_coef: 0.01
+  value_coef: 0.5
+  bc_warmup_epochs: 1
+  bc_weight: 0.5
+  batch_episodes: 4
+
+# PPO configuration (keys align to PPOConfig)
+ppo:
+  episodes: 30
+  lr: 0.0003
+  clip_eps: 0.2
+  ppo_epochs: 4
+  batch_episodes: 8
+  minibatch_size: 1024
+  entropy_coef: 0.01
+  value_coef: 0.5
+  gae_lambda: 0.95
+  bc_warmup_epochs: 2
+  bc_weight: 1.0
+
+# Global eval settings
+include_chance: true
+include_trivial: true
+include_markov: true
+
+# Multi-seed aggregation
+seeds: [123, 456, 789]
+
+# Enable scalability/adaptability evaluations
+evaluate_scalability: true
+scalability_small_fraction: 0.5
+
+evaluate_adaptability: true
+adapt_pre_episodes: 80
+adapt_post_episodes: 80
+# Example post-change: slightly higher challenge
+adapt_post_challenge_target: 0.8
+adapt_post_challenge_band: 0.3
+
+# Output CSV
+metrics_csv: "scal_adapt_results_multi.csv"

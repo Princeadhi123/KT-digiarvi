@@ -339,18 +339,17 @@ class ExperimentRunner:
             }
             self.run_records.append({'model': model_uc, 'seed': 'multi', 'variant': 'aggregate', 'ep_return_mean': agg_mean, 'ep_return_std': agg_std})
 
-        # Cross-model normalization of aggregated episodic returns (min-max)
+        # Cross-model normalization of aggregated episodic returns (max-only)
+        # Accuracy(model) = ep_return_mean(model) / max(ep_return_mean(all models))
         try:
             agg_items = [(k, v) for k, v in results.items() if k.endswith('__AGG')]
             ep_vals = np.array([float(v.get('ep_return_mean', np.nan)) for _, v in agg_items], dtype=float)
             mask = ~np.isnan(ep_vals)
             if np.any(mask):
-                vmin = float(np.min(ep_vals[mask]))
                 vmax = float(np.max(ep_vals[mask]))
-                denom = (vmax - vmin) if (vmax - vmin) > 1e-12 else 1.0
                 for (k, v) in agg_items:
                     cur = float(v.get('ep_return_mean', np.nan))
-                    norm = (cur - vmin) / denom if not np.isnan(cur) else float('nan')
+                    norm = (cur / vmax) if (not np.isnan(cur) and vmax > 1e-12) else float('nan')
                     v['ep_return_mean_norm_across_models'] = norm
         except Exception:
             pass
@@ -384,8 +383,9 @@ class ExperimentRunner:
                 else:
                     axis_speed = float('nan')
 
-                # Scalability: invert small/base ratio to large/small, then percent
-                scal_ratio = float(v.get('scalability_ep_return_ratio_agg', float('nan')))
+                # Scalability: invert small/base reward ratio to large/small, then percent
+                # Use reward ratio per user's definition (large/small)
+                scal_ratio = float(v.get('scalability_reward_ratio_agg', float('nan')))
                 if not np.isnan(scal_ratio) and abs(scal_ratio) > 1e-12:
                     axis_scalability = (1.0 / scal_ratio) * 100.0
                 else:
