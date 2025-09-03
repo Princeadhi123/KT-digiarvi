@@ -103,9 +103,6 @@ sarl:
   select_best_on_val: true
   val_episodes: 500
   eval_episodes: 300
-  train_max_steps_per_episode: 12
-  eval_max_steps_per_episode: 12
-  val_max_steps_per_episode: 12
   adapt_interval: 3
   adapt_regret: true
   regret_ratio_target: 0.15
@@ -114,9 +111,9 @@ sarl:
   regret_epsilon_down_step: 0.02
   regret_base_tilt_step: 0.1
   regret_invalid_penalty_step: 0.02
-  hybrid_base_target_share: 0.5
-  hybrid_mastery_target_share: 0.25
-  hybrid_motivation_target_share: 0.25
+  hybrid_base_target_share: 0.7
+  hybrid_mastery_target_share: 0.2
+  hybrid_motivation_target_share: 0.1
   weight_lr: 0.3
   weight_min: 0.1
   weight_max: 3.0

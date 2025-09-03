@@ -41,10 +41,8 @@ sarl:
   select_best_on_val: true
   val_episodes: 200
   eval_episodes: 120
-  train_max_steps_per_episode: 12
-  eval_max_steps_per_episode: 12
-  val_max_steps_per_episode: 12
-  seed: 123
+  # Multi-seed aggregation
+seeds: [123, 456, 789]
   adapt_interval: 3
   adapt_regret: true
   regret_ratio_target: 0.15
@@ -89,4 +87,4 @@ evaluate_scalability: false
 evaluate_adaptability: false
 
 # Output CSV (separate file for this quick check)
-metrics_csv: "sarl_quick.csv"
+metrics_csv: "sarl_quick_no_stepcap.csv"
