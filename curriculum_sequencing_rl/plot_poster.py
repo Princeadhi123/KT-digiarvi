@@ -466,11 +466,22 @@ def generate_all_plots(df: pd.DataFrame, outdir: Path) -> List[Path]:
     return out_paths
 
 
-def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path) -> Path | None:
+def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar_mode: str = "rank", radar_style: str = "highlight", radar_baseline: str | None = None) -> Path | None:
     """Plot radar chart for evaluation axes from aggregated rows.
 
-    Expects columns: axis_accuracy, axis_consistency, axis_speed,
-    axis_scalability, axis_adaptability and 'variant' == 'aggregate'.
+    Modes:
+    - "rank" (default): rank-normalize each axis per selected models.
+      Best rank=1 maps to 100, worst rank=N maps to 100/N (even steps).
+    - "scaled": previous behavior with continuous scaling/min-max overrides.
+
+    Styles:
+    - "highlight": highlight-best overlay with composite-score emphasis and per-axis winner markers (visual hygiene).
+    - "classic": absolute axis values (no rank/min-max), uniform styling.
+    - "small_multiples": grid of mini-radars, one per model, shared scale, minimal labels.
+    - "baseline_delta": deltas vs baseline model, centered at 0 (mapped to 50 ring).
+
+    Expects columns: `axis_accuracy`, `axis_consistency`, `axis_speed`,
+    `axis_scalability`, `axis_adaptability` and 'variant' == 'aggregate'.
     """
     axes_cols = [
         "axis_accuracy", "axis_consistency", "axis_speed",
@@ -509,8 +520,13 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path) -> Pa
             extra = tmp.sort_index().groupby("model_base", as_index=False).tail(1)
         agg_df = pd.concat([agg_df, extra], ignore_index=True, sort=False)
 
-    # Keep only needed columns
-    keep = ["model_base"] + axes_cols
+    # Keep only needed columns (also bring raw stats needed to recompute radar-friendly axes)
+    keep = [
+        "model_base",
+        "ep_return_mean",
+        "ep_return_std",
+        "speed_steps_to_threshold_mean_agg",
+    ] + axes_cols
     agg_df = agg_df[[c for c in keep if c in agg_df.columns]].copy()
     # Drop models with all NaNs for axes
     mask_any = agg_df[axes_cols].notna().any(axis=1)
@@ -518,6 +534,68 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path) -> Pa
     if agg_df.empty:
         print("[INFO] Skipping radar plot (no axis data available)")
         return None
+
+    # Compute radar values based on requested mode
+    if str(radar_mode).lower() == "rank":
+        # Rank-normalize each axis: competition ranking (method='min'), higher is better
+        n = len(agg_df)
+        for col in axes_cols:
+            if col not in agg_df.columns:
+                continue
+            s = agg_df[col].astype(float)
+            # competition ranking: best value -> rank 1, ties share same rank, worst -> rank N
+            ranks = s.rank(method="min", ascending=False)
+            # Missing values are treated as worst
+            ranks = ranks.fillna(float(n))
+            scores = 100.0 - (ranks - 1.0) * (100.0 / float(max(n, 1)))
+            agg_df[f"__{col}_radar"] = scores.clip(lower=0.0, upper=100.0)
+            # Keep originals for optional annotation
+            agg_df[f"__{col}_orig"] = s
+    else:
+        # Recompute radar-friendly axes (continuous scaling)
+        # - Consistency & Speed: soft min–max (10–90) with proper orientation
+        # - Scalability & Adaptability: local normalization 0–100 (annotate raw)
+        # Consistency: lower CV (std/|mean|) is better
+        cons_override = None
+        if {"ep_return_mean", "ep_return_std"}.issubset(agg_df.columns):
+            mean_abs = agg_df["ep_return_mean"].abs().replace(0.0, np.nan)
+            cv = (agg_df["ep_return_std"].astype(float) / mean_abs).astype(float)
+            cv_min = np.nanmin(cv.values)
+            cv_max = np.nanmax(cv.values)
+            if np.isfinite(cv_min) and np.isfinite(cv_max) and (cv_max - cv_min) > 1e-12:
+                # invert (lower is better) and map to [10, 90]
+                cons_override = 10.0 + 80.0 * (cv_max - cv) / (cv_max - cv_min)
+            else:
+                cons_override = pd.Series(50.0, index=agg_df.index)
+            agg_df["__axis_consistency_radar"] = cons_override.clip(lower=0.0, upper=100.0)
+
+        # Speed: lower steps is better
+        speed_override = None
+        if "speed_steps_to_threshold_mean_agg" in agg_df.columns:
+            steps = agg_df["speed_steps_to_threshold_mean_agg"].astype(float)
+            st_min = np.nanmin(steps.values)
+            st_max = np.nanmax(steps.values)
+            if np.isfinite(st_min) and np.isfinite(st_max) and (st_max - st_min) > 1e-12:
+                # invert (lower is better) and map to [10, 90]
+                speed_override = 10.0 + 80.0 * (st_max - steps) / (st_max - st_min)
+            else:
+                speed_override = pd.Series(50.0, index=agg_df.index)
+            agg_df["__axis_speed_radar"] = speed_override.clip(lower=0.0, upper=100.0)
+
+        # Local normalization for Scalability & Adaptability to enhance separation
+        for col_in, col_out in [("axis_scalability", "__axis_scalability_radar"),
+                                ("axis_adaptability", "__axis_adaptability_radar")]:
+            if col_in in agg_df.columns:
+                vals = agg_df[col_in].astype(float)
+                vmin = np.nanmin(vals.values)
+                vmax = np.nanmax(vals.values)
+                if np.isfinite(vmin) and np.isfinite(vmax) and (vmax - vmin) > 1e-12:
+                    scaled = 100.0 * (vals - vmin) / (vmax - vmin)
+                else:
+                    scaled = pd.Series(50.0, index=agg_df.index)
+                agg_df[col_out] = scaled.clip(lower=0.0, upper=100.0)
+                # Keep originals for annotation
+                agg_df[f"__{col_in}_orig"] = vals
 
     labels = ["Accuracy", "Consistency", "Speed", "Scalability", "Adaptability"]
     # Order categories and close the loop
@@ -528,7 +606,30 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path) -> Pa
         if row.empty:
             continue
         model_labels.append(m)
-        vals = [float(row.iloc[0][c]) if pd.notna(row.iloc[0][c]) else 0.0 for c in axes_cols]
+        # Pull radar values per mode
+        if str(radar_mode).lower() == "rank":
+            vals = []
+            for c in axes_cols:
+                colname = f"__{c}_radar"
+                if colname in agg_df.columns and pd.notna(row.iloc[0][colname]):
+                    vals.append(float(row.iloc[0][colname]))
+                else:
+                    # If missing, fallback to 0.0
+                    vals.append(0.0)
+        else:
+            # Base axis values with overrides (continuous scaling)
+            vals = [float(row.iloc[0][c]) if pd.notna(row.iloc[0][c]) else 0.0 for c in axes_cols]
+            # Consistency override
+            if "__axis_consistency_radar" in agg_df.columns:
+                vals[1] = float(row.iloc[0]["__axis_consistency_radar"]) if pd.notna(row.iloc[0]["__axis_consistency_radar"]) else vals[1]
+            # Speed override
+            if "__axis_speed_radar" in agg_df.columns:
+                vals[2] = float(row.iloc[0]["__axis_speed_radar"]) if pd.notna(row.iloc[0]["__axis_speed_radar"]) else vals[2]
+            # Scalability/Adaptability local normalization
+            if "__axis_scalability_radar" in agg_df.columns:
+                vals[3] = float(row.iloc[0]["__axis_scalability_radar"]) if pd.notna(row.iloc[0]["__axis_scalability_radar"]) else vals[3]
+            if "__axis_adaptability_radar" in agg_df.columns:
+                vals[4] = float(row.iloc[0]["__axis_adaptability_radar"]) if pd.notna(row.iloc[0]["__axis_adaptability_radar"]) else vals[4]
         # Clamp to [0, 100]
         vals = [min(100.0, max(0.0, v)) for v in vals]
         values_mat.append(vals + [vals[0]])
@@ -542,28 +643,231 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path) -> Pa
     angles = np.linspace(0, 2 * np.pi, N, endpoint=False).tolist()
     angles += [angles[0]]
 
+    # Style/mode normalization
+    mode_lower = str(radar_mode).lower()
+    style_lower = str(radar_style).lower()
+
+    # Special style: small multiples (grid of mini-radars)
+    if style_lower == "small_multiples":
+        M = len(model_labels)
+        # Dynamic grid close to square; typical use is 2x2 for 4 models
+        rows = int(np.ceil(np.sqrt(M))) if M > 0 else 1
+        cols = int(np.ceil(M / rows)) if rows > 0 else 1
+        fig_w = max(3.6 * cols, 4.0)
+        fig_h = max(3.6 * rows, 4.0)
+        fig, axes = plt.subplots(rows, cols, subplot_kw=dict(polar=True), figsize=(fig_w, fig_h))
+        if not isinstance(axes, np.ndarray):
+            axes = np.array([[axes]])
+        axes = axes.reshape(rows, cols)
+
+        for idx in range(rows * cols):
+            r = idx // cols
+            c = idx % cols
+            ax = axes[r, c]
+            if idx >= M:
+                ax.axis('off')
+                continue
+            vals = values_mat[idx]
+            m = model_labels[idx]
+            color = MODEL_COLORS.get(m, THEME_HEX)
+
+            ax.set_theta_offset(np.pi / 2)
+            ax.set_theta_direction(-1)
+            ax.set_xticks(angles[:-1])
+            # Show category labels only on the first subplot
+            if idx == 0:
+                ax.set_xticklabels(labels, color="#1a1a1a", fontsize=10)
+            else:
+                ax.set_xticklabels([])
+            # Radial config shared
+            ax.set_rlabel_position(0)
+            ax.set_ylim(0, 100)
+            ax.set_yticks([25, 50, 75, 100])
+            ax.set_yticklabels(["25", "50", "75", "100"], color="#666666", fontsize=8)
+            ax.grid(True, alpha=0.25)
+
+            ax.plot(angles, vals, color=color, linewidth=1.8)
+            ax.fill(angles, vals, color=color, alpha=0.06)
+            ax.set_title(m, color=color, fontsize=11, pad=8)
+
+        sufx = "Rank-normalized (Best=100)" if mode_lower == "rank" else "0–100"
+        fig.suptitle(f"Evaluation Axes — {sufx} • Small-multiples", color=THEME_HEX, y=0.98)
+        fig.tight_layout(rect=[0, 0, 1, 0.96])
+        out_path = outdir / "poster_radar_axes.png"
+        fig.savefig(out_path, dpi=300)
+        plt.close(fig)
+        return out_path
+
+    # Special style: baseline delta (center at 0 mapped to 50 ring)
+    if style_lower == "baseline_delta":
+        # Determine baseline label/index (case-insensitive against model_labels)
+        baseline = (radar_baseline or (model_labels[0] if model_labels else None))
+        if baseline is None:
+            print("[INFO] Skipping radar plot (no models for baseline-delta)")
+            return None
+        baseline_u = str(baseline).upper()
+        try:
+            base_idx = model_labels.index(baseline_u)
+        except ValueError:
+            base_idx = 0
+            baseline_u = model_labels[0]
+
+        # Core values (without closure) for delta calc
+        values_core = np.array([v[:-1] for v in values_mat], dtype=float)
+        base_core = values_core[base_idx]
+        deltas = values_core - base_core  # shape: (M, N)
+        max_abs = float(np.nanmax(np.abs(deltas))) if np.isfinite(np.nanmax(np.abs(deltas))) else 0.0
+        if max_abs < 1e-12:
+            max_abs = 1.0  # avoid div-by-zero, everything at baseline
+
+        # Map delta to radial with baseline at 50
+        radials = 50.0 + 50.0 * (deltas / max_abs)
+        radials = np.clip(radials, 0.0, 100.0)
+        radials_closed = [np.concatenate([r, [r[0]]]).tolist() for r in radials]
+
+        fig, ax = plt.subplots(figsize=(7.2, 7.2), subplot_kw=dict(polar=True))
+        ax.set_theta_offset(np.pi / 2)
+        ax.set_theta_direction(-1)
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(labels, color="#1a1a1a")
+        ax.set_rlabel_position(0)
+        ax.set_ylim(0, 100)
+        ax.set_yticks([0, 25, 50, 75, 100])
+        # Y tick labels in delta units (rounded)
+        yt_lbls = [f"{-max_abs:.0f}", f"{-0.5*max_abs:.0f}", "0", f"{0.5*max_abs:.0f}", f"{max_abs:.0f}"]
+        ax.set_yticklabels(yt_lbls, color="#555555")
+        ax.grid(True, alpha=0.28)
+
+        # Draw baseline ring at 50
+        ring = [50.0] * (N + 1)
+        ax.plot(angles, ring, color=THEME_HEX, linestyle="--", linewidth=1.6, alpha=0.7, label=f"Baseline: {baseline_u}")
+
+        # Plot each non-baseline model
+        for i, (vals, m) in enumerate(zip(radials_closed, model_labels)):
+            if i == base_idx:
+                continue
+            color = MODEL_COLORS.get(m, THEME_HEX)
+            ax.plot(angles, vals, color=color, linewidth=2.0, label=m)
+            ax.fill(angles, vals, color=color, alpha=0.04)
+
+        sufx = "Rank-normalized" if mode_lower == "rank" else "Scaled"
+        ax.set_title(f"Evaluation Axes — Δ vs {baseline_u} (center=0) • {sufx}", color=THEME_HEX, pad=20)
+        ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=min(len(model_labels), 6), frameon=False)
+        fig.tight_layout(rect=[0, 0.12, 1, 1])
+        out_path = outdir / "poster_radar_axes.png"
+        fig.savefig(out_path, dpi=300)
+        plt.close(fig)
+        return out_path
+
     fig, ax = plt.subplots(figsize=(7.2, 7.2), subplot_kw=dict(polar=True))
     ax.set_theta_offset(np.pi / 2)
     ax.set_theta_direction(-1)
     ax.set_xticks(angles[:-1])
     ax.set_xticklabels(labels, color="#1a1a1a")
-    # Radial limits
-    ax.set_rlabel_position(0)
-    ax.set_ylim(0, 100)
-    ax.set_yticks([20, 40, 60, 80, 100])
-    ax.set_yticklabels(["20", "40", "60", "80", "100"], color="#555555")
-    ax.grid(True, alpha=0.3)
 
-    # Plot each model polygon
-    for vals, m in zip(values_mat, model_labels):
-        color = MODEL_COLORS.get(m, THEME_HEX)
-        ax.plot(angles, vals, color=color, linewidth=2.0, label=m)
-        ax.fill(angles, vals, color=color, alpha=0.08)
+    # Prepare composite score and per-axis winners from core (non-closed) values
+    values_core = np.array([v[:-1] for v in values_mat], dtype=float)
+    composites = np.nanmean(values_core, axis=1) if len(values_core) else np.array([])
+    best_idx = int(np.nanargmax(composites)) if composites.size else 0
+    winners_by_axis: List[List[int]] = []
+    for j in range(N):
+        col = values_core[:, j]
+        max_j = np.nanmax(col)
+        winners = [i for i, v in enumerate(col) if np.isfinite(v) and abs(v - max_j) <= 1e-9]
+        winners_by_axis.append(winners)
 
-    ax.set_title("Evaluation Axes (0–100)", color=THEME_HEX, pad=20)
-    # Legend outside
-    ax.legend(loc="upper left", bbox_to_anchor=(1.05, 1.05), frameon=False)
-    fig.tight_layout(rect=[0, 0, 0.85, 1])
+    # Radial limits and grid styling by style
+    if str(radar_style).lower() == "highlight":
+        ax.set_rlabel_position(0)
+        ax.set_ylim(0, 100)
+        ax.set_yticks([25, 50, 75, 100])
+        ax.set_yticklabels(["25", "50", "75", "100"], color="#666666")
+        ax.grid(True, alpha=0.25)
+    else:
+        ax.set_rlabel_position(0)
+        ax.set_ylim(0, 100)
+        ax.set_yticks([20, 40, 60, 80, 100])
+        ax.set_yticklabels(["20", "40", "60", "80", "100"], color="#555555")
+        ax.grid(True, alpha=0.3)
+
+    style_is_highlight = (str(radar_style).lower() == "highlight")
+
+    if style_is_highlight:
+        # Plot non-highlight models first with lighter strokes and no fill
+        for i, (vals, m) in enumerate(zip(values_mat, model_labels)):
+            color = MODEL_COLORS.get(m, THEME_HEX)
+            if i != best_idx:
+                ax.plot(angles, vals, color=color, linewidth=1.3, alpha=0.55, label=m)
+
+        # Plot the best composite model with emphasis and a subtle fill
+        vals_best = values_mat[best_idx]
+        m_best = model_labels[best_idx]
+        color_best = MODEL_COLORS.get(m_best, THEME_HEX)
+        ax.plot(angles, vals_best, color=color_best, linewidth=2.8, alpha=1.0, label=m_best)
+        ax.fill(angles, vals_best, color=color_best, alpha=0.04)
+
+        # Per-axis winner markers and single label per axis
+        for j in range(N):
+            ang = angles[j]
+            w_idxs = winners_by_axis[j]
+            if not w_idxs:
+                continue
+            rmax = max(values_mat[i][j] for i in w_idxs)
+            for i in w_idxs:
+                m = model_labels[i]
+                color = MODEL_COLORS.get(m, THEME_HEX)
+                ax.scatter([ang], [values_mat[i][j]], c=[color], s=28, zorder=5, edgecolors="white", linewidths=0.7)
+            winners_lbl = "/".join([model_labels[i] for i in w_idxs])
+            ax.text(ang, min(100.0, rmax + 4.0), winners_lbl, color="#222222", fontsize=8, ha="center", va="bottom")
+    else:
+        # Classic style: plot absolute axis_* values with uniform styling
+        for i, m in enumerate(model_labels):
+            color = MODEL_COLORS.get(m, THEME_HEX)
+            row = agg_df[agg_df["model_base"] == m]
+            if row.empty:
+                continue
+            r0 = row.iloc[0]
+            vals_abs = [
+                float(r0.get("axis_accuracy", np.nan)),
+                float(r0.get("axis_consistency", np.nan)),
+                float(r0.get("axis_speed", np.nan)),
+                float(r0.get("axis_scalability", np.nan)),
+                float(r0.get("axis_adaptability", np.nan)),
+            ]
+            vals_abs = [0.0 if not np.isfinite(v) else min(100.0, max(0.0, v)) for v in vals_abs]
+            vals_plot = vals_abs + [vals_abs[0]]
+
+            ax.plot(angles, vals_plot, color=color, linewidth=2.0, label=m)
+            ax.fill(angles, vals_plot, color=color, alpha=0.08)
+
+            # Annotate raw Scalability/Adaptability values for clarity (classic only)
+            try:
+                scal_orig = float(r0.get("axis_scalability", np.nan))
+                adapt_orig = float(r0.get("axis_adaptability", np.nan))
+                scal_idx = labels.index("Scalability")
+                adapt_idx = labels.index("Adaptability")
+                r_scal = min(100.0, max(0.0, vals_plot[scal_idx] + 4.0))
+                r_adap = min(100.0, max(0.0, vals_plot[adapt_idx] + 4.0))
+                ax.text(angles[scal_idx], r_scal, f"{scal_orig:.2f}", color=color, fontsize=8, ha="center", va="bottom")
+                ax.text(angles[adapt_idx], r_adap, f"{adapt_orig:.2f}", color=color, fontsize=8, ha="center", va="bottom")
+            except Exception:
+                pass
+
+    # Title suffix reflects style: highlight uses selected mode, classic is absolute axis values
+    if style_is_highlight:
+        title_suffix = "Rank-normalized (Best=100)" if str(radar_mode).lower() == "rank" else "0–100"
+    else:
+        title_suffix = "Absolute (axis values)"
+    style_suffix = "Highlight-best overlay" if style_is_highlight else "Classic"
+    ax.set_title(f"Evaluation Axes — {title_suffix} • {style_suffix}", color=THEME_HEX, pad=20)
+
+    # Legend placement by style
+    if style_is_highlight:
+        ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=min(len(model_labels), 6), frameon=False)
+        fig.tight_layout(rect=[0, 0.12, 1, 1])
+    else:
+        ax.legend(loc="upper left", bbox_to_anchor=(1.05, 1.05), frameon=False)
+        fig.tight_layout(rect=[0, 0, 0.85, 1])
     out_path = outdir / "poster_radar_axes.png"
     fig.savefig(out_path, dpi=300)
     plt.close(fig)
@@ -584,6 +888,12 @@ def parse_args() -> argparse.Namespace:
                    help="How to select one row per model when multiple exist.")
     p.add_argument("--theme_hex", type=str, default=DEFAULT_THEME_HEX,
                    help="Base hex color for plots, e.g., #006A4E")
+    p.add_argument("--radar_mode", type=str, default="rank", choices=["rank", "scaled"],
+                   help="Radar scoring: 'rank' (best=100, worst=100/N) or 'scaled' (continuous)")
+    p.add_argument("--radar_style", type=str, default="highlight", choices=["highlight", "classic", "small_multiples", "baseline_delta"],
+                   help="Radar style: 'highlight', 'classic', 'small_multiples', or 'baseline_delta'")
+    p.add_argument("--radar_baseline", type=str, default=None,
+                   help="Baseline model (by name) for 'baseline_delta' style. Defaults to first in --models.")
     return p.parse_args()
 
 
@@ -610,7 +920,15 @@ def main() -> None:
 
     paths = generate_all_plots(df_sel, outdir)
     # Radar plot uses aggregated rows across all CSVs
-    radar_path = plot_radar_axes(df_all, models=models, outdir=outdir)
+    radar_path = plot_radar_axes(
+        df_all,
+        models=models,
+        outdir=outdir,
+        radar_mode=getattr(args, "radar_mode", "rank"),
+        radar_style=getattr(args, "radar_style", "highlight"),
+        radar_baseline=getattr(args, "radar_baseline", None),
+    )
+
     if radar_path is not None:
         paths.append(radar_path)
     print("Saved plots:")
