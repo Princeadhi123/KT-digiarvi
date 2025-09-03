@@ -164,6 +164,19 @@ class SARLDQNConfig(DQNConfig):
     challenge_band_min: float = 0.2
     challenge_band_max: float = 0.6
 
+    # Regret-aware adaptation (optional)
+    # If enabled, SARL will use validation regret_ratio to further adapt epsilon
+    # and bias hybrid weights toward base when regret is high.
+    adapt_regret: bool = True
+    regret_ratio_target: float = 0.15
+    regret_ratio_tolerance: float = 0.02
+    regret_epsilon_up_step: float = 0.05
+    regret_epsilon_down_step: float = 0.02
+    # When regret is above target, increase base weight by this step (clipped to [weight_min, weight_max]).
+    regret_base_tilt_step: float = 0.1
+    # Optionally, make invalid actions slightly more punitive when regret is high (<= 0 keeps disabled)
+    regret_invalid_penalty_step: float = 0.0
+
 
 @dataclass
 class ExperimentConfig:

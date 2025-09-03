@@ -39,6 +39,8 @@ class SARLDQNTrainer(BaseTrainer):
         self.best_score = float('-inf')
         self.no_improve_count = 0
         self._recent_stats: Deque[Dict[str, float]] = deque(maxlen=max(1, self.config.adapt_interval))
+        # Track last validation metrics (including regret diagnostics)
+        self._last_val_metrics: Dict[str, float] = {}
 
     # -----------------------------
     # Boilerplate
@@ -140,6 +142,11 @@ class SARLDQNTrainer(BaseTrainer):
             env, policy, mode="val", episodes=self.config.val_episodes,
             max_steps_per_episode=self.config.val_max_steps_per_episode
         )
+        # Stash for regret-aware adaptation
+        try:
+            self._last_val_metrics = {k: float(v) for k, v in metrics.items() if isinstance(v, (int, float))}
+        except Exception:
+            self._last_val_metrics = {}
         val_reward = float(metrics.get('reward', 0.0))
 
         improved = val_reward > (self.best_score + 1e-6)
@@ -155,6 +162,13 @@ class SARLDQNTrainer(BaseTrainer):
         if self.no_improve_count >= max(1, self.config.lr_patience):
             self._reduce_lr()
             self.no_improve_count = 0
+
+        # Optional regret-aware adaptation applied immediately after validation
+        if getattr(self.config, 'adapt_regret', False):
+            try:
+                self._adapt_from_regret(env, self.agent)  # type: ignore[attr-defined]
+            except Exception:
+                pass
 
     def _reduce_lr(self) -> None:
         """Reduce optimizer LR by factor with floor."""
@@ -271,6 +285,80 @@ class SARLDQNTrainer(BaseTrainer):
             # widen band: subtract negative step to widen
             env.config.challenge_band = float(min(self.config.challenge_band_max,
                                                   env.config.challenge_band - self.config.challenge_band_step))
+
+    def _adapt_from_regret(self, env: Any, agent: DQNAgent) -> None:
+        """Regret-aware adaptation using last validation regret_ratio.
+
+        - If regret_ratio > target + tol: increase epsilon, tilt hybrid weights toward base,
+          and optionally increase invalid_penalty.
+        - If regret_ratio < target - tol: decrease epsilon and undo tilt slightly.
+        """
+        rr = float(self._last_val_metrics.get('regret_ratio', float('nan'))) if hasattr(self, '_last_val_metrics') else float('nan')
+        if math.isnan(rr):
+            return
+        target = float(getattr(self.config, 'regret_ratio_target', 0.15))
+        tol = float(getattr(self.config, 'regret_ratio_tolerance', 0.02))
+        hi = target + tol
+        lo = target - tol
+
+        def _clip_w(x: float) -> float:
+            return float(min(self.config.weight_max, max(self.config.weight_min, x)))
+
+        # Current epsilon
+        eps = agent.epsilon_scheduler.get_epsilon()
+        changed = False
+
+        if rr > hi:
+            # Encourage exploration and bias immediate-score alignment
+            eps = min(self.config.eps_max, eps + getattr(self.config, 'regret_epsilon_up_step', 0.0))
+            agent.epsilon_scheduler.set_epsilon(eps)
+
+            hb = getattr(env.config, 'hybrid_base_w', 1.0)
+            hm = getattr(env.config, 'hybrid_mastery_w', 1.0)
+            hv = getattr(env.config, 'hybrid_motivation_w', 1.0)
+            step = float(getattr(self.config, 'regret_base_tilt_step', 0.0))
+            if step != 0.0:
+                hb_new = _clip_w(hb + step)
+                # Gently reduce others if above floor to keep balance
+                hm_new = _clip_w(hm - 0.5 * step)
+                hv_new = _clip_w(hv - 0.5 * step)
+                env.config.hybrid_base_w = hb_new
+                env.config.hybrid_mastery_w = hm_new
+                env.config.hybrid_motivation_w = hv_new
+                changed = True
+
+            inv_step = float(getattr(self.config, 'regret_invalid_penalty_step', 0.0))
+            if inv_step > 0.0 and hasattr(env.config, 'invalid_penalty'):
+                try:
+                    env.config.invalid_penalty = float(env.config.invalid_penalty) - abs(inv_step)
+                    changed = True
+                except Exception:
+                    pass
+
+        elif rr < lo:
+            # Regret well below target: reduce exploration slightly, relax base tilt
+            eps = max(self.config.eps_min, eps - getattr(self.config, 'regret_epsilon_down_step', 0.0))
+            agent.epsilon_scheduler.set_epsilon(eps)
+
+            hb = getattr(env.config, 'hybrid_base_w', 1.0)
+            hm = getattr(env.config, 'hybrid_mastery_w', 1.0)
+            hv = getattr(env.config, 'hybrid_motivation_w', 1.0)
+            step = float(getattr(self.config, 'regret_base_tilt_step', 0.0))
+            if step != 0.0:
+                hb_new = _clip_w(hb - step)
+                hm_new = _clip_w(hm + 0.5 * step)
+                hv_new = _clip_w(hv + 0.5 * step)
+                env.config.hybrid_base_w = hb_new
+                env.config.hybrid_mastery_w = hm_new
+                env.config.hybrid_motivation_w = hv_new
+                changed = True
+
+        # Refresh environment reward normalization if weights or penalty changed
+        if changed:
+            try:
+                env._setup_reward_config()
+            except Exception:
+                pass
 
     # -----------------------------
     # Main training loop: add periodic adaptation and model selection

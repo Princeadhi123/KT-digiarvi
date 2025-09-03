@@ -8,15 +8,15 @@ environment:
   hybrid_motivation_w: 1.0
   # Multi-objective shaping weights
   rew_improve_w: 0.5
-  rew_deficit_w: 0.3
+  rew_deficit_w: 0.5
   rew_spacing_w: 0.2
-  rew_diversity_w: 0.6
-  rew_challenge_w: 0.4
+  rew_diversity_w: 0.2
+  rew_challenge_w: 0.2
   # Shaping hyperparameters
   ema_alpha: 0.3
   need_threshold: 0.6
-  spacing_window: 16
-  diversity_recent_k: 10
+  spacing_window: 5
+  diversity_recent_k: 5
   challenge_target: 0.7
   challenge_band: 0.4
   invalid_penalty: -0.1
@@ -89,27 +89,34 @@ ppo:
 
 # SARL (Self-Adaptive RL) configuration (keys align to SARLDQNConfig)
 sarl:
-  episodes: 200
-  lr: 0.001
-  gamma: 0.99
-  batch_size: 128
-  buffer_size: 20000
-  hidden_dim: 128
+  episodes: 300
+  lr: 0.0003
+  gamma: 0.997
+  batch_size: 512
+  buffer_size: 120000
+  hidden_dim: 512
   eps_start: 1.0
-  eps_end: 0.05
+  eps_end: 0.01
   eps_decay_steps: 20000
   target_tau: 0.01
   target_update_interval: 1
   select_best_on_val: true
-  val_episodes: 300
+  val_episodes: 500
   eval_episodes: 300
   train_max_steps_per_episode: 12
   eval_max_steps_per_episode: 12
   val_max_steps_per_episode: 12
-  adapt_interval: 5
-  hybrid_base_target_share: 0.7
-  hybrid_mastery_target_share: 0.2
-  hybrid_motivation_target_share: 0.1
+  adapt_interval: 3
+  adapt_regret: true
+  regret_ratio_target: 0.15
+  regret_ratio_tolerance: 0.02
+  regret_epsilon_up_step: 0.05
+  regret_epsilon_down_step: 0.02
+  regret_base_tilt_step: 0.1
+  regret_invalid_penalty_step: 0.02
+  hybrid_base_target_share: 0.5
+  hybrid_mastery_target_share: 0.25
+  hybrid_motivation_target_share: 0.25
   weight_lr: 0.3
   weight_min: 0.1
   weight_max: 3.0
