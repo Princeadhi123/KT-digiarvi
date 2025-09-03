@@ -124,20 +124,53 @@ def _select_per_model(df: pd.DataFrame, models: List[str], strategy: str = "late
     # Helper for grouping selection
     def _pick(group: pd.DataFrame) -> pd.DataFrame:
         g = group.copy()
-        # Prefer aggregates if present
+        # For bar plots we want rows that actually have values (avoid NaNs from aggregates)
+        value_cols = [c for c in [
+            "reward", "vpr", "regret_ratio",
+            "hybrid_base_share_pct", "hybrid_mastery_share_pct", "hybrid_motivation_share_pct",
+            "reward_base_contrib", "reward_mastery", "reward_motivation",
+            "term_improve", "term_deficit", "term_spacing", "term_diversity", "term_challenge",
+        ] if c in g.columns]
+
+        g_pref = g
+        if value_cols:
+            mask_non_na = g[value_cols].notna().any(axis=1)
+            if mask_non_na.any():
+                g_pref = g[mask_non_na].copy()
+
+        # Prefer base variant if available among preferred rows
+        if "variant" in g_pref.columns and (g_pref["variant"].astype(str) == "base").any():
+            g_pref = g_pref[g_pref["variant"].astype(str) == "base"].copy()
+
+        # Strategy-based pick on preferred subset first
+        cand = g_pref if not g_pref.empty else g
+        if "timestamp" in cand.columns:
+            cand["__ts_key"] = cand["timestamp"].astype(str).map(_coerce_timestamp)
+        if strategy == "latest" and "__ts_key" in cand.columns:
+            return cand.loc[[cand["__ts_key"].idxmax()]]
+        elif strategy == "max_reward" and "reward" in cand.columns:
+            # Choose from rows that have reward if possible
+            if value_cols and "reward" in value_cols:
+                cand_r = cand[cand["reward"].notna()]
+                if not cand_r.empty:
+                    return cand_r.loc[[cand_r["reward"].idxmax()]]
+            return cand.loc[[cand["reward"].idxmax()]] if not cand.empty else g.tail(1)
+        elif strategy == "min_regret" and "regret_ratio" in cand.columns:
+            cand_rr = cand[cand["regret_ratio"].notna()]
+            if not cand_rr.empty:
+                return cand_rr.loc[[cand_rr["regret_ratio"].idxmin()]]
+            return cand.loc[[cand["regret_ratio"].idxmin()]] if not cand.empty else g.tail(1)
+
+        # If nothing matched and aggregates exist, fallback to aggregate row
         if "variant" in g.columns and (g["variant"].astype(str) == "aggregate").any():
-            g = g[g["variant"].astype(str) == "aggregate"].copy()
-        # Strategy-based pick
-        if "timestamp" in g.columns:
-            g["__ts_key"] = g["timestamp"].astype(str).map(_coerce_timestamp)
-        if strategy == "latest" and "__ts_key" in g.columns:
-            return g.loc[[g["__ts_key"].idxmax()]]
-        elif strategy == "max_reward" and "reward" in g.columns:
-            return g.loc[[g["reward"].idxmax()]]
-        elif strategy == "min_regret" and "regret_ratio" in g.columns:
-            return g.loc[[g["regret_ratio"].idxmin()]]
-        # Fallback: last row
-        return g.tail(1)
+            g_agg = g[g["variant"].astype(str) == "aggregate"].copy()
+            if "timestamp" in g_agg.columns:
+                g_agg["__ts_key"] = g_agg["timestamp"].astype(str).map(_coerce_timestamp)
+                return g_agg.loc[[g_agg["__ts_key"].idxmax()]]
+            return g_agg.tail(1)
+
+        # Final fallback: last available row
+        return cand.tail(1) if not cand.empty else g.tail(1)
 
     picked = (
         sub.sort_index()
