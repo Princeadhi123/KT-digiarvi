@@ -128,6 +128,12 @@ class ExperimentRunner:
 
             model_uc = model_name.upper()
             ep_means_across_seeds: List[float] = []
+            speed_means_across_seeds: List[float] = []
+            speed_success_across_seeds: List[float] = []
+            scal_ep_ratio_across_seeds: List[float] = []  # small/base per-seed
+            adapt_ep_ratio_across_seeds: List[float] = []  # post/pre per-seed
+            scal_reward_ratio_across_seeds: List[float] = []  # small/base reward
+            adapt_reward_ratio_across_seeds: List[float] = []  # post/pre reward
 
             for seed in seeds:
                 # Set up reproducibility per seed
@@ -158,6 +164,15 @@ class ExperimentRunner:
                 # Track episodic accuracy per seed
                 ep_mean = float(base_metrics.get('ep_return_mean', np.nan))
                 ep_means_across_seeds.append(ep_mean)
+                # Track speed per seed (mean steps to threshold and success rate)
+                try:
+                    speed_means_across_seeds.append(float(base_metrics.get('speed_steps_to_threshold_mean', np.nan)))
+                except Exception:
+                    speed_means_across_seeds.append(float('nan'))
+                try:
+                    speed_success_across_seeds.append(float(base_metrics.get('speed_success_rate', np.nan)))
+                except Exception:
+                    speed_success_across_seeds.append(float('nan'))
 
                 # Demo if requested
                 if self.config.config.demo:
@@ -208,6 +223,15 @@ class ExperimentRunner:
 
                 base_metrics['scalability_reward_ratio'] = scalability_reward_ratio
                 base_metrics['scalability_ep_return_ratio'] = scalability_ep_return_ratio
+                # Track scalability ratio per seed (small/base)
+                try:
+                    scal_ep_ratio_across_seeds.append(float(base_metrics.get('scalability_ep_return_ratio', np.nan)))
+                except Exception:
+                    scal_ep_ratio_across_seeds.append(float('nan'))
+                try:
+                    scal_reward_ratio_across_seeds.append(float(base_metrics.get('scalability_reward_ratio', np.nan)))
+                except Exception:
+                    scal_reward_ratio_across_seeds.append(float('nan'))
 
                 # Adaptability: evaluate pre vs post environment change
                 adaptability_reward_ratio = float('nan')
@@ -259,6 +283,15 @@ class ExperimentRunner:
 
                 base_metrics['adaptability_reward_ratio'] = adaptability_reward_ratio
                 base_metrics['adaptability_ep_return_ratio'] = adaptability_ep_return_ratio
+                # Track adaptability ratio per seed (post/pre)
+                try:
+                    adapt_ep_ratio_across_seeds.append(float(base_metrics.get('adaptability_ep_return_ratio', np.nan)))
+                except Exception:
+                    adapt_ep_ratio_across_seeds.append(float('nan'))
+                try:
+                    adapt_reward_ratio_across_seeds.append(float(base_metrics.get('adaptability_reward_ratio', np.nan)))
+                except Exception:
+                    adapt_reward_ratio_across_seeds.append(float('nan'))
 
                 self.logger.info(
                     f"Completed {model_name} seed={seed}: reward={base_metrics.get('reward', float('nan')):.3f} ep_return_mean={base_metrics.get('ep_return_mean', float('nan')):.3f}"
@@ -275,11 +308,34 @@ class ExperimentRunner:
             except Exception:
                 agg_mean, agg_std = float('nan'), float('nan')
 
+            # Compute additional aggregates across seeds for axes
+            def _nanmean(arr: List[float]) -> float:
+                try:
+                    a = np.array(arr, dtype=float)
+                    m = ~np.isnan(a)
+                    return float(np.mean(a[m])) if np.any(m) else float('nan')
+                except Exception:
+                    return float('nan')
+
+            agg_speed_mean = _nanmean(speed_means_across_seeds)
+            agg_speed_success = _nanmean(speed_success_across_seeds)
+            agg_scal_ratio = _nanmean(scal_ep_ratio_across_seeds)  # small/base
+            agg_adapt_ratio = _nanmean(adapt_ep_ratio_across_seeds)  # post/pre
+            agg_scal_reward_ratio = _nanmean(scal_reward_ratio_across_seeds)
+            agg_adapt_reward_ratio = _nanmean(adapt_reward_ratio_across_seeds)
+
             results[f"{model_uc}__AGG"] = {
                 'seed': 'multi',
                 'variant': 'aggregate',
                 'ep_return_mean': agg_mean,
                 'ep_return_std': agg_std,
+                # Store aggregates needed for axis computations
+                'speed_steps_to_threshold_mean_agg': agg_speed_mean,
+                'speed_success_rate_agg': agg_speed_success,
+                'scalability_ep_return_ratio_agg': agg_scal_ratio,
+                'adaptability_ep_return_ratio_agg': agg_adapt_ratio,
+                'scalability_reward_ratio_agg': agg_scal_reward_ratio,
+                'adaptability_reward_ratio_agg': agg_adapt_reward_ratio,
             }
             self.run_records.append({'model': model_uc, 'seed': 'multi', 'variant': 'aggregate', 'ep_return_mean': agg_mean, 'ep_return_std': agg_std})
 
@@ -296,6 +352,63 @@ class ExperimentRunner:
                     cur = float(v.get('ep_return_mean', np.nan))
                     norm = (cur - vmin) / denom if not np.isnan(cur) else float('nan')
                     v['ep_return_mean_norm_across_models'] = norm
+        except Exception:
+            pass
+
+        # Compute 0–100 evaluation axis scores on aggregated entries
+        try:
+            agg_items = [(k, v) for k, v in results.items() if k.endswith('__AGG')]
+            # Consistency and Speed need cross-model maxima
+            std_vals = np.array([float(v.get('ep_return_std', np.nan)) for _, v in agg_items], dtype=float)
+            std_max = float(np.nanmax(std_vals)) if np.any(~np.isnan(std_vals)) else float('nan')
+
+            speed_vals = np.array([float(v.get('speed_steps_to_threshold_mean_agg', np.nan)) for _, v in agg_items], dtype=float)
+            speed_max = float(np.nanmax(speed_vals)) if np.any(~np.isnan(speed_vals)) else float('nan')
+
+            for (k, v) in agg_items:
+                # Accuracy: normalized ep_return_mean across models (0–1) -> percent
+                acc_norm = float(v.get('ep_return_mean_norm_across_models', float('nan')))
+                axis_accuracy = 100.0 * acc_norm if not np.isnan(acc_norm) else float('nan')
+
+                # Consistency: lower std is better -> 100 - (std / max_std)*100
+                cur_std = float(v.get('ep_return_std', float('nan')))
+                if not np.isnan(cur_std) and (not np.isnan(std_max)) and std_max > 1e-12:
+                    axis_consistency = 100.0 - (cur_std / std_max) * 100.0
+                else:
+                    axis_consistency = float('nan')
+
+                # Speed: lower steps is better -> 100 - (steps / max_steps)*100
+                cur_steps = float(v.get('speed_steps_to_threshold_mean_agg', float('nan')))
+                if not np.isnan(cur_steps) and (not np.isnan(speed_max)) and speed_max > 1e-12:
+                    axis_speed = 100.0 - (cur_steps / speed_max) * 100.0
+                else:
+                    axis_speed = float('nan')
+
+                # Scalability: invert small/base ratio to large/small, then percent
+                scal_ratio = float(v.get('scalability_ep_return_ratio_agg', float('nan')))
+                if not np.isnan(scal_ratio) and abs(scal_ratio) > 1e-12:
+                    axis_scalability = (1.0 / scal_ratio) * 100.0
+                else:
+                    axis_scalability = float('nan')
+
+                # Adaptability: post/pre reward ratio -> percent
+                adapt_ratio = float(v.get('adaptability_reward_ratio_agg', float('nan')))
+                axis_adaptability = adapt_ratio * 100.0 if not np.isnan(adapt_ratio) else float('nan')
+
+                # Optional clamp to [0, 100] to satisfy 0–100 range
+                def _clamp_0_100(x: float) -> float:
+                    try:
+                        if np.isnan(x):
+                            return x
+                        return float(max(0.0, min(100.0, x)))
+                    except Exception:
+                        return float('nan')
+
+                v['axis_accuracy'] = _clamp_0_100(axis_accuracy)
+                v['axis_consistency'] = _clamp_0_100(axis_consistency)
+                v['axis_speed'] = _clamp_0_100(axis_speed)
+                v['axis_scalability'] = _clamp_0_100(axis_scalability)
+                v['axis_adaptability'] = _clamp_0_100(axis_adaptability)
         except Exception:
             pass
         
@@ -420,7 +533,15 @@ class ExperimentRunner:
             "ep_return_mean", "ep_return_std", "ep_return_mean_norm_across_models",
             # Extended evaluation axes metadata
             "variant", "scalability_reward_ratio", "scalability_ep_return_ratio",
-            "adaptability_reward_ratio", "adaptability_ep_return_ratio"
+            "adaptability_reward_ratio", "adaptability_ep_return_ratio",
+            # Aggregates across seeds for axes
+            "speed_steps_to_threshold_mean_agg", "speed_success_rate_agg",
+            "scalability_ep_return_ratio_agg", "adaptability_ep_return_ratio_agg",
+            "scalability_reward_ratio_agg", "adaptability_reward_ratio_agg",
+            # Final axis scores (0–100)
+            "axis_accuracy", "axis_consistency", "axis_speed", "axis_scalability", "axis_adaptability",
+            # Helper label
+            "model_base"
         ]
         
         # Add environment and model config fields
@@ -480,6 +601,12 @@ class ExperimentRunner:
                 for key, value in metrics.items():
                     row[key] = value
                 
+                # Add base model label (strip any variant suffix like __seed or __AGG)
+                try:
+                    row["model_base"] = str(row["model"]).split("__")[0].upper()
+                except Exception:
+                    row["model_base"] = str(row["model"]).upper()
+
                 # Add percentage versions
                 for base_key in ['vpr', 'regret_ratio', 'reward_base', 'reward_norm']:
                     if base_key in metrics and not np.isnan(metrics[base_key]):

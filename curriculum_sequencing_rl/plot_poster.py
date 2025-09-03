@@ -86,6 +86,11 @@ def _read_csvs(csv_paths: List[Path]) -> pd.DataFrame:
     # Normalize model labels
     if "model" in df_all.columns:
         df_all["model"] = df_all["model"].astype(str).str.upper()
+    # Ensure a robust base label for models (strip variant suffixes)
+    if "model_base" in df_all.columns:
+        df_all["model_base"] = df_all["model_base"].astype(str).str.upper()
+    else:
+        df_all["model_base"] = df_all["model"].astype(str).str.split("__").str[0].str.upper()
     return df_all
 
 
@@ -99,33 +104,52 @@ def _coerce_timestamp(ts: str) -> float:
 
 
 def _select_per_model(df: pd.DataFrame, models: List[str], strategy: str = "latest") -> pd.DataFrame:
+    """Select a single representative row per requested model for bar plots.
+
+    Uses 'model_base' for robust matching and returns rows with 'model' set
+    to the base label. Preference order within each model_base:
+    - If any aggregated rows exist (variant == 'aggregate'), pick one according to strategy.
+    - Else fall back to non-aggregated per strategy using timestamp/regret/reward.
+    """
     if "model" not in df.columns:
         raise ValueError("CSV missing 'model' column.")
-    df = df[df["model"].isin([m.upper() for m in models])].copy()
-    if df.empty:
+    if "model_base" not in df.columns:
+        df = df.copy()
+        df["model_base"] = df["model"].astype(str).str.split("__").str[0].str.upper()
+    req = [m.upper() for m in models]
+    sub = df[df["model_base"].isin(req)].copy()
+    if sub.empty:
         raise ValueError("No rows for requested models in provided CSVs.")
 
-    # Handle missing timestamp gracefully
-    if "timestamp" not in df.columns:
-        # Take last occurrence per model by index order
-        return df.sort_index().groupby("model", as_index=False).tail(1)
+    # Helper for grouping selection
+    def _pick(group: pd.DataFrame) -> pd.DataFrame:
+        g = group.copy()
+        # Prefer aggregates if present
+        if "variant" in g.columns and (g["variant"].astype(str) == "aggregate").any():
+            g = g[g["variant"].astype(str) == "aggregate"].copy()
+        # Strategy-based pick
+        if "timestamp" in g.columns:
+            g["__ts_key"] = g["timestamp"].astype(str).map(_coerce_timestamp)
+        if strategy == "latest" and "__ts_key" in g.columns:
+            return g.loc[[g["__ts_key"].idxmax()]]
+        elif strategy == "max_reward" and "reward" in g.columns:
+            return g.loc[[g["reward"].idxmax()]]
+        elif strategy == "min_regret" and "regret_ratio" in g.columns:
+            return g.loc[[g["regret_ratio"].idxmin()]]
+        # Fallback: last row
+        return g.tail(1)
 
-    df["__ts_key"] = df["timestamp"].astype(str).map(_coerce_timestamp)
-    if strategy == "latest":
-        idx = df.groupby("model")["__ts_key"].idxmax()
-        return df.loc[idx].copy()
-    elif strategy == "max_reward":
-        if "reward" not in df.columns:
-            return df.sort_index().groupby("model", as_index=False).tail(1)
-        idx = df.groupby("model")["reward"].idxmax()
-        return df.loc[idx].copy()
-    elif strategy == "min_regret":
-        if "regret_ratio" not in df.columns:
-            return df.sort_index().groupby("model", as_index=False).tail(1)
-        idx = df.groupby("model")["regret_ratio"].idxmin()
-        return df.loc[idx].copy()
-    else:
-        raise ValueError(f"Unknown selection strategy: {strategy}")
+    picked = (
+        sub.sort_index()
+           .groupby("model_base", group_keys=False)
+           .apply(_pick)
+           .copy()
+    )
+    # Normalize display label to base
+    picked["model"] = picked["model_base"].astype(str).str.upper()
+    # Ensure ordering by requested list
+    picked = picked[picked["model"].isin(req)].copy()
+    return picked
 
 
 def _compute_derived_fields(df: pd.DataFrame) -> pd.DataFrame:
@@ -409,6 +433,110 @@ def generate_all_plots(df: pd.DataFrame, outdir: Path) -> List[Path]:
     return out_paths
 
 
+def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path) -> Path | None:
+    """Plot radar chart for evaluation axes from aggregated rows.
+
+    Expects columns: axis_accuracy, axis_consistency, axis_speed,
+    axis_scalability, axis_adaptability and 'variant' == 'aggregate'.
+    """
+    axes_cols = [
+        "axis_accuracy", "axis_consistency", "axis_speed",
+        "axis_scalability", "axis_adaptability",
+    ]
+    if not all(c in df_all.columns for c in axes_cols):
+        print("[INFO] Skipping radar plot (missing axis_* columns)")
+        return None
+    df = df_all.copy()
+    # Ensure model_base
+    if "model_base" not in df.columns:
+        df["model_base"] = df["model"].astype(str).str.split("__").str[0].str.upper()
+    req = [m.upper() for m in models]
+    df = df[df["model_base"].isin(req)].copy()
+    if df.empty:
+        print("[INFO] Skipping radar plot (no rows for requested models)")
+        return None
+    # Prefer aggregated rows per base model
+    if "variant" in df.columns:
+        agg_df = df[df["variant"].astype(str) == "aggregate"].copy()
+    else:
+        # Heuristic fallback: models ending with __AGG
+        agg_df = df[df["model"].astype(str).str.endswith("__AGG")].copy()
+    # If some models missing aggregate, fallback to latest per base
+    missing = set(req) - set(agg_df["model_base"].unique().tolist())
+    if missing:
+        # Pick latest per missing model_base if axis columns exist
+        tmp = df[df["model_base"].isin(list(missing))].copy()
+        # Keep rows that at least have some axis data
+        have_any = tmp[axes_cols].notna().any(axis=1)
+        tmp = tmp[have_any]
+        if "timestamp" in tmp.columns and not tmp.empty:
+            tmp["__ts_key"] = tmp["timestamp"].astype(str).map(_coerce_timestamp)
+            extra = tmp.sort_values("__ts_key").groupby("model_base", as_index=False).tail(1)
+        else:
+            extra = tmp.sort_index().groupby("model_base", as_index=False).tail(1)
+        agg_df = pd.concat([agg_df, extra], ignore_index=True, sort=False)
+
+    # Keep only needed columns
+    keep = ["model_base"] + axes_cols
+    agg_df = agg_df[[c for c in keep if c in agg_df.columns]].copy()
+    # Drop models with all NaNs for axes
+    mask_any = agg_df[axes_cols].notna().any(axis=1)
+    agg_df = agg_df[mask_any]
+    if agg_df.empty:
+        print("[INFO] Skipping radar plot (no axis data available)")
+        return None
+
+    labels = ["Accuracy", "Consistency", "Speed", "Scalability", "Adaptability"]
+    # Order categories and close the loop
+    values_mat = []
+    model_labels = []
+    for m in req:
+        row = agg_df[agg_df["model_base"] == m]
+        if row.empty:
+            continue
+        model_labels.append(m)
+        vals = [float(row.iloc[0][c]) if pd.notna(row.iloc[0][c]) else 0.0 for c in axes_cols]
+        # Clamp to [0, 100]
+        vals = [min(100.0, max(0.0, v)) for v in vals]
+        values_mat.append(vals + [vals[0]])
+
+    if not values_mat:
+        print("[INFO] Skipping radar plot (no models with axis data)")
+        return None
+
+    # Angles for axes
+    N = len(labels)
+    angles = np.linspace(0, 2 * np.pi, N, endpoint=False).tolist()
+    angles += [angles[0]]
+
+    fig, ax = plt.subplots(figsize=(7.2, 7.2), subplot_kw=dict(polar=True))
+    ax.set_theta_offset(np.pi / 2)
+    ax.set_theta_direction(-1)
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(labels, color="#1a1a1a")
+    # Radial limits
+    ax.set_rlabel_position(0)
+    ax.set_ylim(0, 100)
+    ax.set_yticks([20, 40, 60, 80, 100])
+    ax.set_yticklabels(["20", "40", "60", "80", "100"], color="#555555")
+    ax.grid(True, alpha=0.3)
+
+    # Plot each model polygon
+    for vals, m in zip(values_mat, model_labels):
+        color = MODEL_COLORS.get(m, THEME_HEX)
+        ax.plot(angles, vals, color=color, linewidth=2.0, label=m)
+        ax.fill(angles, vals, color=color, alpha=0.08)
+
+    ax.set_title("Evaluation Axes (0–100)", color=THEME_HEX, pad=20)
+    # Legend outside
+    ax.legend(loc="upper left", bbox_to_anchor=(1.05, 1.05), frameon=False)
+    fig.tight_layout(rect=[0, 0, 0.85, 1])
+    out_path = outdir / "poster_radar_axes.png"
+    fig.savefig(out_path, dpi=300)
+    plt.close(fig)
+    return out_path
+
+
 def parse_args() -> argparse.Namespace:
     here = Path(__file__).resolve()
     # Default to a 'poster' folder inside curriculum_sequencing_rl
@@ -448,6 +576,10 @@ def main() -> None:
     print(df_sel[[c for c in ["model", "timestamp", "reward", "vpr", "regret_ratio", "__source_csv"] if c in df_sel.columns]].to_string(index=False))
 
     paths = generate_all_plots(df_sel, outdir)
+    # Radar plot uses aggregated rows across all CSVs
+    radar_path = plot_radar_axes(df_all, models=models, outdir=outdir)
+    if radar_path is not None:
+        paths.append(radar_path)
     print("Saved plots:")
     for p in paths:
         if p.exists():
