@@ -359,20 +359,52 @@ class ExperimentRunner:
             agg_items = [(k, v) for k, v in results.items() if k.endswith('__AGG')]
             # Consistency and Speed need cross-model maxima
             std_vals = np.array([float(v.get('ep_return_std', np.nan)) for _, v in agg_items], dtype=float)
-            std_max = float(np.nanmax(std_vals)) if np.any(~np.isnan(std_vals)) else float('nan')
-
             speed_vals = np.array([float(v.get('speed_steps_to_threshold_mean_agg', np.nan)) for _, v in agg_items], dtype=float)
+
+            # Previous speed normalization uses max steps (lower is better)
             speed_max = float(np.nanmax(speed_vals)) if np.any(~np.isnan(speed_vals)) else float('nan')
+
+            # Consistency: use coefficient of variation (CV = std / |mean|), then normalize across models
+            mean_vals = np.array([float(v.get('ep_return_mean', np.nan)) for _, v in agg_items], dtype=float)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                cv_vals_all = np.where(
+                    (~np.isnan(std_vals)) & (~np.isnan(mean_vals)) & (np.abs(mean_vals) > 1e-12),
+                    std_vals / np.abs(mean_vals),
+                    np.nan,
+                )
+            cv_max = float(np.nanmax(cv_vals_all)) if np.any(~np.isnan(cv_vals_all)) else float('nan')
+
+            # Scalability: normalize large/small reward ratio across models (like accuracy normalization)
+            # We use LS = 1 / (small/base reward ratio) so that larger is better, then scale by max across models
+            scal_reward_ratio_vals = np.array([float(v.get('scalability_reward_ratio_agg', np.nan)) for _, v in agg_items], dtype=float)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                ls_vals_all = np.where(
+                    (~np.isnan(scal_reward_ratio_vals)) & (np.abs(scal_reward_ratio_vals) > 1e-12),
+                    1.0 / scal_reward_ratio_vals,
+                    np.nan,
+                )
+            ls_max = float(np.nanmax(ls_vals_all)) if np.any(~np.isnan(ls_vals_all)) else float('nan')
 
             for (k, v) in agg_items:
                 # Accuracy: normalized ep_return_mean across models (0–1) -> percent
                 acc_norm = float(v.get('ep_return_mean_norm_across_models', float('nan')))
                 axis_accuracy = 100.0 * acc_norm if not np.isnan(acc_norm) else float('nan')
 
-                # Consistency: lower std is better -> 100 - (std / max_std)*100
+                # Consistency: use CV (std/|mean|); lower CV is better -> 100 - (cv / max_cv)*100
                 cur_std = float(v.get('ep_return_std', float('nan')))
-                if not np.isnan(cur_std) and (not np.isnan(std_max)) and std_max > 1e-12:
-                    axis_consistency = 100.0 - (cur_std / std_max) * 100.0
+                cur_mean = float(v.get('ep_return_mean', float('nan')))
+                if (
+                    not np.isnan(cur_std)
+                    and not np.isnan(cur_mean)
+                    and (not np.isnan(cv_max))
+                    and (abs(cur_mean) > 1e-12)
+                ):
+                    cur_cv = cur_std / abs(cur_mean)
+                    if cv_max > 1e-12:
+                        axis_consistency = 100.0 - (cur_cv / cv_max) * 100.0
+                    else:
+                        # All models have ~zero CV -> perfect consistency across the board
+                        axis_consistency = 100.0
                 else:
                     axis_consistency = float('nan')
 
@@ -383,11 +415,19 @@ class ExperimentRunner:
                 else:
                     axis_speed = float('nan')
 
-                # Scalability: invert small/base reward ratio to large/small, then percent
-                # Use reward ratio per user's definition (large/small)
+                # Scalability: normalize large/small reward ratio across models (no clamping-based saturation)
                 scal_ratio = float(v.get('scalability_reward_ratio_agg', float('nan')))
-                if not np.isnan(scal_ratio) and abs(scal_ratio) > 1e-12:
-                    axis_scalability = (1.0 / scal_ratio) * 100.0
+                if (
+                    not np.isnan(scal_ratio)
+                    and (abs(scal_ratio) > 1e-12)
+                    and (not np.isnan(ls_max))
+                ):
+                    cur_ls = 1.0 / scal_ratio
+                    if ls_max > 1e-12:
+                        axis_scalability = 100.0 * (cur_ls / ls_max)
+                    else:
+                        # Degenerate case: all models have ~zero LS -> treat as equally maxed
+                        axis_scalability = 100.0
                 else:
                     axis_scalability = float('nan')
 
