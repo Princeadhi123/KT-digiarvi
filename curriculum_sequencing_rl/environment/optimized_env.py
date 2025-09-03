@@ -45,6 +45,23 @@ class OptimizedInteractiveEnv:
         missing = [c for c in required_cols if c not in self.df.columns]
         if missing:
             raise ValueError(f"Missing required columns: {missing}")
+
+        # Optional: downsample students for scalability experiments
+        # We filter the dataframe to a random subset of students before any further preprocessing
+        try:
+            frac = float(getattr(self.config, "student_fraction", 1.0))
+        except Exception:
+            frac = 1.0
+        if frac <= 0.0:
+            raise ValueError("student_fraction must be > 0")
+        if frac < 1.0:
+            students = np.array(self.df["student_id"].unique())
+            # Use environment RNG (seeded) for reproducibility
+            self.rng.shuffle(students)
+            import numpy as _np  # local alias to avoid confusion
+            n_keep = max(1, int(_np.ceil(len(students) * frac)))
+            keep_ids = set(students[:n_keep].tolist())
+            self.df = self.df[self.df["student_id"].isin(keep_ids)].reset_index(drop=True)
         
         # Set up action space
         self.category_col = self.config.action_on

@@ -38,6 +38,8 @@ def create_argument_parser() -> argparse.ArgumentParser:
     env_group.add_argument("--action_on", type=str, default="category",
                           choices=["category", "category_group"],
                           help="Action space basis")
+    env_group.add_argument("--student_fraction", type=float, default=1.0,
+                          help="Fraction of students to include (0-1] for scalability experiments")
     
     # Multi-objective shaping
     shaping_group = parser.add_argument_group("Reward Shaping")
@@ -121,6 +123,8 @@ def create_argument_parser() -> argparse.ArgumentParser:
                          action="store_true", help="Enable Q-Learning validation selection")
     ql_group.add_argument("--ql_val_episodes", type=int, default=300,
                          help="Q-Learning validation episodes")
+    ql_group.add_argument("--ql_speed_threshold_norm", type=float, default=None,
+                         help="Threshold on normalized shaped reward used for speed metrics (steps-to-threshold)")
     parser.set_defaults(ql_select_best_on_val=False)
     
     # DQN parameters
@@ -151,6 +155,8 @@ def create_argument_parser() -> argparse.ArgumentParser:
                           action="store_true", help="Enable DQN validation selection")
     dqn_group.add_argument("--dqn_val_episodes", type=int, default=300,
                           help="DQN validation episodes")
+    dqn_group.add_argument("--dqn_speed_threshold_norm", type=float, default=None,
+                          help="Threshold on normalized shaped reward used for speed metrics (steps-to-threshold)")
     parser.set_defaults(dqn_select_best_on_val=False)
     
     # A2C parameters
@@ -169,6 +175,8 @@ def create_argument_parser() -> argparse.ArgumentParser:
                           help="A2C behavior cloning weight")
     a2c_group.add_argument("--a2c_batch_episodes", type=int, default=4,
                           help="A2C batch episodes")
+    a2c_group.add_argument("--a2c_speed_threshold_norm", type=float, default=None,
+                          help="Threshold on normalized shaped reward used for speed metrics (steps-to-threshold)")
     
     # A3C parameters
     a3c_group = parser.add_argument_group("A3C")
@@ -188,6 +196,8 @@ def create_argument_parser() -> argparse.ArgumentParser:
                           help="A3C behavior cloning weight")
     a3c_group.add_argument("--a3c_rollouts", type=int, default=4,
                           help="A3C rollouts per update")
+    a3c_group.add_argument("--a3c_speed_threshold_norm", type=float, default=None,
+                          help="Threshold on normalized shaped reward used for speed metrics (steps-to-threshold)")
     
     # PPO parameters
     ppo_group = parser.add_argument_group("PPO")
@@ -213,6 +223,8 @@ def create_argument_parser() -> argparse.ArgumentParser:
                           help="PPO behavior cloning warmup epochs")
     ppo_group.add_argument("--ppo_bc_weight", type=float, default=1.0,
                           help="PPO behavior cloning weight")
+    ppo_group.add_argument("--ppo_speed_threshold_norm", type=float, default=None,
+                          help="Threshold on normalized shaped reward used for speed metrics (steps-to-threshold)")
     
     # SARL parameters (Self-Adaptive DQN)
     sarl_group = parser.add_argument_group("SARL (Self-Adaptive DQN)")
@@ -254,6 +266,9 @@ def create_argument_parser() -> argparse.ArgumentParser:
     sarl_group.add_argument("--sarl_train_max_steps_per_episode", type=int, default=None,
                            help="Max steps per training episode for SARL")
     parser.set_defaults(sarl_select_best_on_val=False)
+    # Speed threshold used for speed metrics (steps-to-threshold)
+    sarl_group.add_argument("--sarl_speed_threshold_norm", type=float, default=None,
+                           help="Threshold on normalized shaped reward for speed metrics (steps-to-threshold)")
     # Adaptation cadence
     sarl_group.add_argument("--sarl_adapt_interval", type=int, default=5,
                            help="Episodes between adaptation steps")

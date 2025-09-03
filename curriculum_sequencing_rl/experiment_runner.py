@@ -10,6 +10,7 @@ import numpy as np
 from .core import Config, setup_device, set_seed, TrainerFactory
 from .environment import OptimizedInteractiveEnv, BaselinePolicies
 from .evaluation import eval_policy_interactive_metrics, print_sample_rollouts
+from . import agents  # noqa: F401 - ensure trainer registration via import side-effects
 
 
 class ExperimentRunner:
@@ -49,6 +50,7 @@ class ExperimentRunner:
         # Determine evaluation episodes and max steps for baselines from first configured model
         eval_episodes = None
         eval_max_steps_per_episode = None
+        speed_threshold_norm = None
         for m in self.config.config.models:
             if m in {'ql', 'dqn', 'a2c', 'a3c', 'ppo', 'sarl'}:
                 try:
@@ -56,6 +58,7 @@ class ExperimentRunner:
                     eval_episodes = mc.eval_episodes
                     # Optional cap to guarantee fast/hanging-proof evaluation
                     eval_max_steps_per_episode = getattr(mc, 'eval_max_steps_per_episode', None)
+                    speed_threshold_norm = getattr(mc, 'speed_threshold_norm', None)
                     break
                 except Exception:
                     pass
@@ -80,7 +83,8 @@ class ExperimentRunner:
             self.logger.info(f"Evaluating baseline: {name}")
             metrics = eval_policy_interactive_metrics(
                 env, policy, mode="test", episodes=eval_episodes,
-                max_steps_per_episode=eval_max_steps_per_episode
+                max_steps_per_episode=eval_max_steps_per_episode,
+                speed_threshold_norm=speed_threshold_norm
             )
             results[name] = metrics
             
@@ -99,6 +103,8 @@ class ExperimentRunner:
         """Run RL model training and evaluation."""
         env = self.setup_environment()
         results = {}
+        # Helpful debug: list all trainers that are currently registered
+        self.logger.info("Available trainers: %s", TrainerFactory.list_available())
         
         for model_name in self.config.config.models:
             if model_name not in TrainerFactory.list_available():
@@ -121,7 +127,8 @@ class ExperimentRunner:
             policy = agent.get_policy(env)
             metrics = eval_policy_interactive_metrics(
                 env, policy, mode="test", episodes=model_config.eval_episodes,
-                max_steps_per_episode=getattr(model_config, 'eval_max_steps_per_episode', None)
+                max_steps_per_episode=getattr(model_config, 'eval_max_steps_per_episode', None),
+                speed_threshold_norm=getattr(model_config, 'speed_threshold_norm', None)
             )
             results[model_name.upper()] = metrics
             
@@ -211,6 +218,17 @@ class ExperimentRunner:
                 f"after_shaping_base_share%={base_share:.1f}  after_shaping_mastery_share%={mastery_share:.1f}  "
                 f"after_shaping_motivation_share%={motivation_share:.1f}"
             )
+
+            # Brief speed summary
+            sp_thr = metrics.get('speed_threshold_norm', float('nan'))
+            sp_mean = metrics.get('speed_steps_to_threshold_mean', float('nan'))
+            sp_med = metrics.get('speed_steps_to_threshold_median', float('nan'))
+            sp_succ = metrics.get('speed_success_rate', float('nan'))
+            sp_succ_pct = sp_succ * 100.0 if not np.isnan(sp_succ) else float('nan')
+            if not (np.isnan(sp_thr) and np.isnan(sp_mean) and np.isnan(sp_succ)):
+                print(
+                    f"  speed: threshold_norm={sp_thr:.2f} steps_mean={sp_mean:.1f} steps_median={sp_med:.1f} success%={sp_succ_pct:.1f}"
+                )
     
     def _save_results_to_csv(self) -> None:
         """Save results to CSV file."""
@@ -226,7 +244,9 @@ class ExperimentRunner:
             "reward_base_contrib_pct", "reward_mastery_pct", "reward_motivation_pct",
             "hybrid_base_share_pct", "hybrid_mastery_share_pct", "hybrid_motivation_share_pct",
             "mask_violations", "mask_violation_rate",
-            "term_improve", "term_deficit", "term_spacing", "term_diversity", "term_challenge"
+            "term_improve", "term_deficit", "term_spacing", "term_diversity", "term_challenge",
+            # Speed metrics
+            "speed_threshold_norm", "speed_steps_to_threshold_mean", "speed_steps_to_threshold_median", "speed_success_rate"
         ]
         
         # Add environment and model config fields
@@ -237,7 +257,9 @@ class ExperimentRunner:
             "rew_improve_w", "rew_deficit_w", "rew_spacing_w", 
             "rew_diversity_w", "rew_challenge_w",
             "ema_alpha", "need_threshold", "spacing_window", 
-            "diversity_recent_k", "challenge_target", "challenge_band", "invalid_penalty"
+            "diversity_recent_k", "challenge_target", "challenge_band", "invalid_penalty",
+            # Environment sampling
+            "student_fraction"
         ])
         
         # Check if file exists and has header
@@ -254,6 +276,13 @@ class ExperimentRunner:
                     existing_header = next(reader)
                     if isinstance(existing_header, list) and len(existing_header) > 0:
                         fieldnames_to_use = existing_header
+                        # Warn if important new fields are missing; they will be omitted
+                        missing_cols = [c for c in default_fieldnames if c not in existing_header]
+                        if missing_cols:
+                            self.logger.warning(
+                                "Existing CSV missing columns; new fields will be omitted: %s",
+                                ", ".join(missing_cols)
+                            )
             except Exception:
                 fieldnames_to_use = None
         if fieldnames_to_use is None:
@@ -305,7 +334,7 @@ class ExperimentRunner:
                            'rew_deficit_w', 'rew_spacing_w', 'rew_diversity_w', 
                            'rew_challenge_w', 'ema_alpha', 'need_threshold',
                            'spacing_window', 'diversity_recent_k', 'challenge_target',
-                           'challenge_band', 'invalid_penalty']:
+                           'challenge_band', 'invalid_penalty', 'student_fraction']:
                     row[attr] = getattr(env_config, attr)
 
                 writer.writerow(row)
