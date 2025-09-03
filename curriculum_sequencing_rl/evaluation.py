@@ -217,11 +217,14 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
     speed_steps_list = []
 
     interactive_ok = hasattr(env, "valid_action_ids") and hasattr(env, "_rows_by_action")
+    # Track per-episode returns for episodic accuracy/consistency
+    ep_returns = []
     for _ in range(episodes):
         state = env.reset(mode)
         done = False
         steps = 0
         ep_threshold_step = None
+        ep_return = 0.0
         while not done:
             best_pre = _best_remaining_immediate_reward(env) if interactive_ok else float("nan")
             cur_cat = int(np.argmax(state[: env.action_size]))
@@ -229,6 +232,7 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
             next_state, reward, done, info = env.step(action)
             reward = float(reward)
             reward_sum += reward
+            ep_return += reward
             total_steps += 1
 
             if isinstance(info, dict):
@@ -285,6 +289,8 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
             if (max_steps_per_episode is not None) and (steps >= max_steps_per_episode):
                 # Force-terminate episode to avoid long/hanging runs
                 done = True
+        # Record per-episode return
+        ep_returns.append(float(ep_return))
         # Record per-episode threshold crossing if it happened
         if (speed_threshold_norm is not None) and (ep_threshold_step is not None):
             speed_steps_list.append(ep_threshold_step)
@@ -316,6 +322,9 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
             "speed_steps_to_threshold_mean": speed_mean,
             "speed_steps_to_threshold_median": speed_median,
             "speed_success_rate": speed_success,
+            # Episodic return aggregates
+            "ep_return_mean": float(np.mean(ep_returns)) if len(ep_returns) > 0 else 0.0,
+            "ep_return_std": float(np.std(ep_returns)) if len(ep_returns) > 0 else 0.0,
         }
 
     inv_steps = 1.0 / float(total_steps)
@@ -346,4 +355,7 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
         "speed_steps_to_threshold_mean": speed_mean,
         "speed_steps_to_threshold_median": speed_median,
         "speed_success_rate": speed_success,
+        # Episodic return aggregates
+        "ep_return_mean": float(np.mean(ep_returns)) if len(ep_returns) > 0 else 0.0,
+        "ep_return_std": float(np.std(ep_returns)) if len(ep_returns) > 0 else 0.0,
     }

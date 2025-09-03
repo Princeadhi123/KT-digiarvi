@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 import numpy as np
+from copy import deepcopy
 
 from .core import Config, setup_device, set_seed, TrainerFactory
 from .environment import OptimizedInteractiveEnv, BaselinePolicies
@@ -20,6 +21,7 @@ class ExperimentRunner:
         self.config = config
         self.env: Optional[OptimizedInteractiveEnv] = None
         self.results: Dict[str, Dict[str, Any]] = {}
+        self.run_records: List[Dict[str, Any]] = []
         self.logger = self._setup_logging()
     
     def _setup_logging(self) -> logging.Logger:
@@ -101,7 +103,8 @@ class ExperimentRunner:
     
     def run_rl_models(self) -> Dict[str, Dict[str, Any]]:
         """Run RL model training and evaluation."""
-        env = self.setup_environment()
+        # Ensure an environment exists for initial information/logging
+        _ = self.setup_environment()
         results = {}
         # Helpful debug: list all trainers that are currently registered
         self.logger.info("Available trainers: %s", TrainerFactory.list_available())
@@ -116,32 +119,185 @@ class ExperimentRunner:
             # Get model config
             model_config = self.config.get_model_config(model_name)
             
-            # Set up reproducibility
-            set_seed(model_config.seed)
-            
-            # Create and train agent
-            trainer = TrainerFactory.create(model_name, model_config)
-            agent = trainer.train(env)
-            
-            # Evaluate agent
-            policy = agent.get_policy(env)
-            metrics = eval_policy_interactive_metrics(
-                env, policy, mode="test", episodes=model_config.eval_episodes,
-                max_steps_per_episode=getattr(model_config, 'eval_max_steps_per_episode', None),
-                speed_threshold_norm=getattr(model_config, 'speed_threshold_norm', None)
+            # Determine seeds to run
+            seeds: List[int] = (
+                list(self.config.config.seeds)
+                if (self.config.config.seeds is not None)
+                else [int(getattr(model_config, 'seed', 42))]
             )
-            results[model_name.upper()] = metrics
-            
-            # Demo if requested
-            if self.config.config.demo:
-                print_sample_rollouts(
-                    env, policy, mode=self.config.config.demo_mode,
-                    episodes=self.config.config.demo_episodes,
-                    max_steps=self.config.config.demo_steps,
-                    model_name=model_name.upper()
+
+            model_uc = model_name.upper()
+            ep_means_across_seeds: List[float] = []
+
+            for seed in seeds:
+                # Set up reproducibility per seed
+                set_seed(seed)
+
+                # Fresh base environment per seed
+                base_env_cfg = deepcopy(self.config.config.environment)
+                base_env_cfg.seed = int(seed)
+                base_env = OptimizedInteractiveEnv(base_env_cfg)
+
+                # Train agent on base env
+                trainer = TrainerFactory.create(model_name, model_config)
+                agent = trainer.train(base_env)
+
+                # Evaluate on base
+                policy_base = agent.get_policy(base_env)
+                base_metrics = eval_policy_interactive_metrics(
+                    base_env, policy_base, mode="test", episodes=model_config.eval_episodes,
+                    max_steps_per_episode=getattr(model_config, 'eval_max_steps_per_episode', None),
+                    speed_threshold_norm=getattr(model_config, 'speed_threshold_norm', None)
                 )
-            
-            self.logger.info(f"Completed {model_name}: reward={metrics['reward']:.3f}")
+                base_metrics['seed'] = int(seed)
+                base_metrics['variant'] = 'base'
+                base_metrics['student_fraction'] = float(getattr(base_env_cfg, 'student_fraction', 1.0))
+                results[f"{model_uc}__seed{seed}__base"] = base_metrics
+                self.run_records.append({**base_metrics, 'model': model_uc, 'variant': 'base'})
+
+                # Track episodic accuracy per seed
+                ep_mean = float(base_metrics.get('ep_return_mean', np.nan))
+                ep_means_across_seeds.append(ep_mean)
+
+                # Demo if requested
+                if self.config.config.demo:
+                    print_sample_rollouts(
+                        base_env, policy_base, mode=self.config.config.demo_mode,
+                        episodes=self.config.config.demo_episodes,
+                        max_steps=self.config.config.demo_steps,
+                        model_name=f"{model_uc}-seed{seed}-BASE"
+                    )
+
+                # Scalability: evaluate on smaller environment and compute ratios
+                scalability_reward_ratio = float('nan')
+                scalability_ep_return_ratio = float('nan')
+                if bool(getattr(self.config.config, 'evaluate_scalability', False)):
+                    small_env_cfg = deepcopy(base_env_cfg)
+                    small_env_cfg.student_fraction = float(getattr(self.config.config, 'scalability_small_fraction', 0.5))
+                    try:
+                        small_env = OptimizedInteractiveEnv(small_env_cfg)
+                        if (small_env.action_size == base_env.action_size) and (small_env.state_dim == base_env.state_dim):
+                            policy_small = agent.get_policy(small_env)
+                            small_metrics = eval_policy_interactive_metrics(
+                                small_env, policy_small, mode="test", episodes=model_config.eval_episodes,
+                                max_steps_per_episode=getattr(model_config, 'eval_max_steps_per_episode', None),
+                                speed_threshold_norm=getattr(model_config, 'speed_threshold_norm', None)
+                            )
+                            small_metrics['seed'] = int(seed)
+                            small_metrics['variant'] = 'scalability_small'
+                            small_metrics['student_fraction'] = float(small_env_cfg.student_fraction)
+                            results[f"{model_uc}__seed{seed}__scalesmall"] = small_metrics
+                            self.run_records.append({**small_metrics, 'model': model_uc, 'variant': 'scalability_small'})
+
+                            # Ratios small/base
+                            b_r = float(base_metrics.get('reward', np.nan))
+                            s_r = float(small_metrics.get('reward', np.nan))
+                            if (not np.isnan(b_r)) and (abs(b_r) > 1e-12) and (not np.isnan(s_r)):
+                                scalability_reward_ratio = s_r / b_r
+                            b_e = float(base_metrics.get('ep_return_mean', np.nan))
+                            s_e = float(small_metrics.get('ep_return_mean', np.nan))
+                            if (not np.isnan(b_e)) and (abs(b_e) > 1e-12) and (not np.isnan(s_e)):
+                                scalability_ep_return_ratio = s_e / b_e
+                        else:
+                            self.logger.warning(
+                                "Skipping scalability eval for %s seed=%s due to action/state dim mismatch (base_a=%d, small_a=%d, base_s=%d, small_s=%d)",
+                                model_uc, str(seed), base_env.action_size, small_env.action_size, base_env.state_dim, small_env.state_dim
+                            )
+                    except Exception as e:
+                        self.logger.warning("Scalability evaluation failed for %s seed=%s: %s", model_uc, str(seed), str(e))
+
+                base_metrics['scalability_reward_ratio'] = scalability_reward_ratio
+                base_metrics['scalability_ep_return_ratio'] = scalability_ep_return_ratio
+
+                # Adaptability: evaluate pre vs post environment change
+                adaptability_reward_ratio = float('nan')
+                adaptability_ep_return_ratio = float('nan')
+                if bool(getattr(self.config.config, 'evaluate_adaptability', False)):
+                    pre_eps = int(getattr(self.config.config, 'adapt_pre_episodes', model_config.eval_episodes))
+                    pre_metrics = eval_policy_interactive_metrics(
+                        base_env, policy_base, mode="test", episodes=pre_eps,
+                        max_steps_per_episode=getattr(model_config, 'eval_max_steps_per_episode', None),
+                        speed_threshold_norm=getattr(model_config, 'speed_threshold_norm', None)
+                    )
+                    pre_metrics['seed'] = int(seed)
+                    pre_metrics['variant'] = 'adapt_pre'
+                    pre_metrics['student_fraction'] = float(getattr(base_env_cfg, 'student_fraction', 1.0))
+                    results[f"{model_uc}__seed{seed}__adaptpre"] = pre_metrics
+                    self.run_records.append({**pre_metrics, 'model': model_uc, 'variant': 'adapt_pre'})
+
+                    post_env_cfg = deepcopy(base_env_cfg)
+                    if getattr(self.config.config, 'adapt_post_challenge_target', None) is not None:
+                        post_env_cfg.challenge_target = float(getattr(self.config.config, 'adapt_post_challenge_target'))
+                    if getattr(self.config.config, 'adapt_post_challenge_band', None) is not None:
+                        post_env_cfg.challenge_band = float(getattr(self.config.config, 'adapt_post_challenge_band'))
+                    try:
+                        post_env = OptimizedInteractiveEnv(post_env_cfg)
+                        policy_post = agent.get_policy(post_env)
+                        post_eps = int(getattr(self.config.config, 'adapt_post_episodes', model_config.eval_episodes))
+                        post_metrics = eval_policy_interactive_metrics(
+                            post_env, policy_post, mode="test", episodes=post_eps,
+                            max_steps_per_episode=getattr(model_config, 'eval_max_steps_per_episode', None),
+                            speed_threshold_norm=getattr(model_config, 'speed_threshold_norm', None)
+                        )
+                        post_metrics['seed'] = int(seed)
+                        post_metrics['variant'] = 'adapt_post'
+                        post_metrics['student_fraction'] = float(getattr(post_env_cfg, 'student_fraction', 1.0))
+                        results[f"{model_uc}__seed{seed}__adaptpost"] = post_metrics
+                        self.run_records.append({**post_metrics, 'model': model_uc, 'variant': 'adapt_post'})
+
+                        # Ratios post/pre
+                        p_r = float(pre_metrics.get('reward', np.nan))
+                        q_r = float(post_metrics.get('reward', np.nan))
+                        if (not np.isnan(p_r)) and (abs(p_r) > 1e-12) and (not np.isnan(q_r)):
+                            adaptability_reward_ratio = q_r / p_r
+                        p_e = float(pre_metrics.get('ep_return_mean', np.nan))
+                        q_e = float(post_metrics.get('ep_return_mean', np.nan))
+                        if (not np.isnan(p_e)) and (abs(p_e) > 1e-12) and (not np.isnan(q_e)):
+                            adaptability_ep_return_ratio = q_e / p_e
+                    except Exception as e:
+                        self.logger.warning("Adaptability evaluation failed for %s seed=%s: %s", model_uc, str(seed), str(e))
+
+                base_metrics['adaptability_reward_ratio'] = adaptability_reward_ratio
+                base_metrics['adaptability_ep_return_ratio'] = adaptability_ep_return_ratio
+
+                self.logger.info(
+                    f"Completed {model_name} seed={seed}: reward={base_metrics.get('reward', float('nan')):.3f} ep_return_mean={base_metrics.get('ep_return_mean', float('nan')):.3f}"
+                )
+
+            # Aggregate episodic returns across seeds (Accuracy & Consistency)
+            try:
+                vals = np.array([v for v in ep_means_across_seeds if not np.isnan(v)], dtype=float)
+                if vals.size > 0:
+                    agg_mean = float(np.mean(vals))
+                    agg_std = float(np.std(vals))
+                else:
+                    agg_mean, agg_std = float('nan'), float('nan')
+            except Exception:
+                agg_mean, agg_std = float('nan'), float('nan')
+
+            results[f"{model_uc}__AGG"] = {
+                'seed': 'multi',
+                'variant': 'aggregate',
+                'ep_return_mean': agg_mean,
+                'ep_return_std': agg_std,
+            }
+            self.run_records.append({'model': model_uc, 'seed': 'multi', 'variant': 'aggregate', 'ep_return_mean': agg_mean, 'ep_return_std': agg_std})
+
+        # Cross-model normalization of aggregated episodic returns (min-max)
+        try:
+            agg_items = [(k, v) for k, v in results.items() if k.endswith('__AGG')]
+            ep_vals = np.array([float(v.get('ep_return_mean', np.nan)) for _, v in agg_items], dtype=float)
+            mask = ~np.isnan(ep_vals)
+            if np.any(mask):
+                vmin = float(np.min(ep_vals[mask]))
+                vmax = float(np.max(ep_vals[mask]))
+                denom = (vmax - vmin) if (vmax - vmin) > 1e-12 else 1.0
+                for (k, v) in agg_items:
+                    cur = float(v.get('ep_return_mean', np.nan))
+                    norm = (cur - vmin) / denom if not np.isnan(cur) else float('nan')
+                    v['ep_return_mean_norm_across_models'] = norm
+        except Exception:
+            pass
         
         return results
     
@@ -229,6 +385,19 @@ class ExperimentRunner:
                 print(
                     f"  speed: threshold_norm={sp_thr:.2f} steps_mean={sp_mean:.1f} steps_median={sp_med:.1f} success%={sp_succ_pct:.1f}"
                 )
+
+        # Aggregated episodic returns across seeds
+        print("\n=== Accuracy/Consistency (episodic returns aggregated across seeds) ===")
+        for name, metrics in self.results.items():
+            if not name.endswith('__AGG'):
+                continue
+            acc = metrics.get('ep_return_mean', float('nan'))
+            cons = metrics.get('ep_return_std', float('nan'))
+            acc_norm = metrics.get('ep_return_mean_norm_across_models', float('nan'))
+            acc_norm_pct = acc_norm * 100.0 if not np.isnan(acc_norm) else float('nan')
+            print(
+                f"{name:<20}: ep_return_mean={acc:.4f}  ep_return_std={cons:.4f}  ep_return_mean_norm_across_models%={acc_norm_pct:.1f}"
+            )
     
     def _save_results_to_csv(self) -> None:
         """Save results to CSV file."""
@@ -246,7 +415,12 @@ class ExperimentRunner:
             "mask_violations", "mask_violation_rate",
             "term_improve", "term_deficit", "term_spacing", "term_diversity", "term_challenge",
             # Speed metrics
-            "speed_threshold_norm", "speed_steps_to_threshold_mean", "speed_steps_to_threshold_median", "speed_success_rate"
+            "speed_threshold_norm", "speed_steps_to_threshold_mean", "speed_steps_to_threshold_median", "speed_success_rate",
+            # Episodic return aggregates
+            "ep_return_mean", "ep_return_std", "ep_return_mean_norm_across_models",
+            # Extended evaluation axes metadata
+            "variant", "scalability_reward_ratio", "scalability_ep_return_ratio",
+            "adaptability_reward_ratio", "adaptability_ep_return_ratio"
         ]
         
         # Add environment and model config fields
@@ -298,7 +472,7 @@ class ExperimentRunner:
                 row = {
                     "timestamp": timestamp,
                     "model": model_name,
-                    "seed": env_config.seed,
+                    "seed": metrics.get('seed', env_config.seed),
                     "env_type": "interactive"
                 }
                 
@@ -335,7 +509,9 @@ class ExperimentRunner:
                            'rew_challenge_w', 'ema_alpha', 'need_threshold',
                            'spacing_window', 'diversity_recent_k', 'challenge_target',
                            'challenge_band', 'invalid_penalty', 'student_fraction']:
-                    row[attr] = getattr(env_config, attr)
+                    # Preserve any run-specific values already placed by metrics
+                    if attr not in row:
+                        row[attr] = getattr(env_config, attr)
 
                 writer.writerow(row)
         
