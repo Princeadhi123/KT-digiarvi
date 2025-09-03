@@ -89,7 +89,7 @@ ppo:
 
 # SARL (Self-Adaptive RL) configuration (keys align to SARLDQNConfig)
 sarl:
-  episodes: 300
+  episodes: 200
   lr: 0.0003
   gamma: 0.997
   batch_size: 512
