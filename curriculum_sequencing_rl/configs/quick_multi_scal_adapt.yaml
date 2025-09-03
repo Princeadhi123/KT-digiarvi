@@ -35,6 +35,7 @@ q_learning:
   eps_decay_epochs: 3
   select_best_on_val: true
   val_episodes: 300
+  speed_threshold_norm: 0.6
 
 # DQN configuration (keys align to DQNConfig dataclass)
 dqn:
@@ -51,6 +52,7 @@ dqn:
   target_update_interval: 1
   select_best_on_val: true
   val_episodes: 500
+  speed_threshold_norm: 0.6
 
 # A2C configuration (keys align to A2CConfig/PolicyGradientConfig)
 a2c:
@@ -61,6 +63,7 @@ a2c:
   bc_warmup_epochs: 8
   bc_weight: 2.0
   batch_episodes: 8
+  speed_threshold_norm: 0.6
 
 # A3C configuration (keys align to A3CConfig)
 a3c:
@@ -72,6 +75,7 @@ a3c:
   bc_warmup_epochs: 8
   bc_weight: 2.0
   rollouts_per_update: 8
+  speed_threshold_norm: 0.6
 
 # PPO configuration (keys align to PPOConfig)
 ppo:
@@ -86,6 +90,7 @@ ppo:
   gae_lambda: 0.95
   bc_warmup_epochs: 8
   bc_weight: 2.0
+  speed_threshold_norm: 0.6
 
 # SARL (Self-Adaptive RL) configuration (keys align to SARLDQNConfig)
 sarl:
@@ -103,6 +108,7 @@ sarl:
   select_best_on_val: true
   val_episodes: 500
   eval_episodes: 300
+  speed_threshold_norm: 0.6
   adapt_interval: 3
   adapt_regret: true
   regret_ratio_target: 0.15
@@ -111,9 +117,9 @@ sarl:
   regret_epsilon_down_step: 0.02
   regret_base_tilt_step: 0.1
   regret_invalid_penalty_step: 0.02
-  hybrid_base_target_share: 0.7
-  hybrid_mastery_target_share: 0.2
-  hybrid_motivation_target_share: 0.1
+  hybrid_base_target_share: 0.5
+  hybrid_mastery_target_share: 0.25
+  hybrid_motivation_target_share: 0.25
   weight_lr: 0.3
   weight_min: 0.1
   weight_max: 3.0
