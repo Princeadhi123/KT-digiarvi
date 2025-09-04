@@ -25,6 +25,7 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
+import matplotlib.patheffects as path_effects
 
 # Global style for poster-quality figures
 sns.set_theme(style="whitegrid")
@@ -791,7 +792,7 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
     ax.set_theta_offset(np.pi / 2)
     ax.set_theta_direction(-1)
     ax.set_xticks(angles[:-1])
-    ax.set_xticklabels(labels, color="#1a1a1a")
+    ax.set_xticklabels([])
 
     # Prepare composite score and per-axis winners from core (non-closed) values
     values_core = np.array([v[:-1] for v in values_mat], dtype=float)
@@ -808,31 +809,72 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
     if str(radar_style).lower() == "highlight":
         ax.set_rlabel_position(0)
         ax.set_ylim(0, 100)
+        # Include 100 so the outer ring is a true circular gridline
         ax.set_yticks([25, 50, 75, 100])
-        ax.set_yticklabels(["25", "50", "75", "100"], color="#666666")
+        # Hide the '100' tick label (we'll add our own label at the top)
+        ax.set_yticklabels(["25", "50", "75", ""], color="#666666")
+        # Force ticks to only these positions (including 100)
+        ax.yaxis.set_major_locator(mtick.FixedLocator([25, 50, 75, 100]))
         ax.grid(True, alpha=0.25)
+        # Ensure the outermost circle is the 100 ring by hiding the polar frame completely
+        for hide in (lambda: ax.spines["polar"].set_visible(False),
+                     lambda: ax.set_frame_on(False),
+                     lambda: ax.patch.set_visible(False)):
+            try:
+                hide()
+            except Exception:
+                pass
     else:
         ax.set_rlabel_position(0)
         ax.set_ylim(0, 100)
         ax.set_yticks([20, 40, 60, 80, 100])
-        ax.set_yticklabels(["20", "40", "60", "80", "100"], color="#555555")
+        ax.set_yticklabels(["20", "40", "60", "80", ""], color="#555555")
+        # Force ticks to only these positions (including 100)
+        ax.yaxis.set_major_locator(mtick.FixedLocator([20, 40, 60, 80, 100]))
         ax.grid(True, alpha=0.3)
+        # Hide the polar frame completely to avoid any circle beyond 100
+        for hide in (lambda: ax.spines["polar"].set_visible(False),
+                     lambda: ax.set_frame_on(False),
+                     lambda: ax.patch.set_visible(False)):
+            try:
+                hide()
+            except Exception:
+                pass
+
+    # Style the 100 circular gridline as the thick black outer ring
+    try:
+        glines = ax.yaxis.get_gridlines()
+        if glines:
+            gl = glines[-1]
+            gl.set_color("#000000")
+            gl.set_linewidth(3.2)
+            gl.set_linestyle("-")
+            gl.set_alpha(1.0)
+            gl.set_zorder(8)
+    except Exception:
+        pass
+    # Explicit '100' label just inside the ring at the top to avoid overlap with axis label
+    try:
+        txt100 = ax.text(0.0, 98.5, "100", ha="center", va="top", fontsize=13, fontweight="bold",
+                         color="#000000", clip_on=False, zorder=11)
+        try:
+            txt100.set_path_effects([
+                path_effects.Stroke(linewidth=3.0, foreground="white"),
+                path_effects.Normal(),
+            ])
+        except Exception:
+            pass
+    except Exception:
+        pass
 
     style_is_highlight = (str(radar_style).lower() == "highlight")
 
     if style_is_highlight:
-        # Plot non-highlight models first with lighter strokes and no fill
-        for i, (vals, m) in enumerate(zip(values_mat, model_labels)):
+        # Plot all models with uniform strong strokes and subtle fill
+        for vals, m in zip(values_mat, model_labels):
             color = MODEL_COLORS.get(m, THEME_HEX)
-            if i != best_idx:
-                ax.plot(angles, vals, color=color, linewidth=1.3, alpha=0.55, label=m)
-
-        # Plot the best composite model with emphasis and a subtle fill
-        vals_best = values_mat[best_idx]
-        m_best = model_labels[best_idx]
-        color_best = MODEL_COLORS.get(m_best, THEME_HEX)
-        ax.plot(angles, vals_best, color=color_best, linewidth=2.8, alpha=1.0, label=m_best)
-        ax.fill(angles, vals_best, color=color_best, alpha=0.04)
+            ax.plot(angles, vals, color=color, linewidth=2.4, alpha=1.0, label=m)
+            ax.fill(angles, vals, color=color, alpha=0.04)
 
         # Per-axis winner markers and single label per axis
         for j in range(N):
@@ -846,7 +888,7 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
                 color = MODEL_COLORS.get(m, THEME_HEX)
                 ax.scatter([ang], [values_mat[i][j]], c=[color], s=28, zorder=5, edgecolors="white", linewidths=0.7)
             winners_lbl = "/".join([model_labels[i] for i in w_idxs])
-            ax.text(ang, min(100.0, rmax + 4.0), winners_lbl, color="#222222", fontsize=8, ha="center", va="bottom")
+            ax.text(ang, min(115.0, rmax + 4.0), "", color="#222222", fontsize=8, ha="center", va="bottom")
     else:
         # Classic style: plot absolute axis_* values with uniform styling
         for i, m in enumerate(model_labels):
@@ -881,13 +923,14 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
             except Exception:
                 pass
 
-    # Title suffix reflects style: highlight uses selected mode, classic is absolute axis values
-    if style_is_highlight:
-        title_suffix = "Rank-normalized (Best=100)" if str(radar_mode).lower() == "rank" else "0–100"
-    else:
-        title_suffix = "Absolute (axis values)"
-    style_suffix = "Highlight-best overlay" if style_is_highlight else "Classic"
-    ax.set_title(f"Evaluation Axes — {title_suffix} • {style_suffix}", color=THEME_HEX, pad=20)
+    # Axis labels outside the circle in bold (just outside the 100 ring)
+    r_label = 103.0
+    for j, lbl in enumerate(labels):
+        ang = angles[j]
+        ax.text(ang, r_label, lbl, ha="center", va="center", fontsize=12, fontweight="bold", color="#111111", clip_on=False, zorder=10)
+
+    # Title
+    ax.set_title("Comparative Analysis", color=THEME_HEX, pad=20, fontsize=16, fontweight="bold")
 
     # Legend placement by style
     if style_is_highlight:
