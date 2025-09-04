@@ -762,14 +762,16 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
 
         # Draw baseline ring at 50
         ring = [50.0] * (N + 1)
-        ax.plot(angles, ring, color=THEME_HEX, linestyle="--", linewidth=1.6, alpha=0.7, label=f"Baseline: {baseline_u}")
+        ax.plot(angles, ring, color=THEME_HEX, linestyle="--", linewidth=1.6, alpha=0.7, label=f"Baseline: {baseline_u}",
+                solid_joinstyle="round", solid_capstyle="round")
 
         # Plot each non-baseline model
         for i, (vals, m) in enumerate(zip(radials_closed, model_labels)):
             if i == base_idx:
                 continue
             color = MODEL_COLORS.get(m, THEME_HEX)
-            ax.plot(angles, vals, color=color, linewidth=2.0, label=m)
+            ax.plot(angles, vals, color=color, linewidth=2.0, label=m,
+                    solid_joinstyle="round", solid_capstyle="round")
             ax.fill(angles, vals, color=color, alpha=0.04)
 
         sufx = "Rank-normalized" if mode_lower == "rank" else "Scaled"
@@ -784,11 +786,12 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
     fig, ax = plt.subplots(figsize=(7.2, 7.2), subplot_kw=dict(polar=True))
     ax.set_theta_offset(np.pi / 2)
     ax.set_theta_direction(-1)
-    ax.set_xticks(angles[:-1])
+    # Remove theta ticks entirely to avoid small spokes at label angles
+    ax.set_xticks([])
     ax.set_xticklabels([])
     # Remove small radial tick marks (spokes) at the category angles
     try:
-        ax.tick_params(axis="x", which="major", length=0)
+        ax.tick_params(axis="x", which="major", length=0, width=0)
     except Exception:
         pass
 
@@ -871,7 +874,7 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
 
     # Draw bold axis labels outside the 100 ring for clarity
     try:
-        r_label = 113.0
+        r_label = 114.5
         for ang, lab in zip(angles[:-1], labels):
             # Angle-aware alignment for readability
             c = np.cos(ang)
@@ -911,7 +914,8 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
         # Plot all models with uniform strong strokes and subtle fill
         for vals, m in zip(values_mat, model_labels):
             color = MODEL_COLORS.get(m, THEME_HEX)
-            ax.plot(angles, vals, color=color, linewidth=2.4, alpha=1.0, label=m)
+            ax.plot(angles, vals, color=color, linewidth=2.4, alpha=1.0, label=m,
+                    solid_joinstyle="round", solid_capstyle="round")
             ax.fill(angles, vals, color=color, alpha=0.04)
 
         # Per-axis winner markers and single label per axis
@@ -943,9 +947,13 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
                 float(r0.get("axis_adaptability", np.nan)),
             ]
             vals_abs = [0.0 if not np.isfinite(v) else min(100.0, max(0.0, v)) for v in vals_abs]
-            vals_plot = vals_abs + [vals_abs[0]]
+            # Clamp for plotting to avoid touching the 100 ring visually
+            poly_max = 98.5
+            vals_plot = [min(poly_max, v) for v in vals_abs]
+            vals_plot = vals_plot + [vals_plot[0]]
 
-            ax.plot(angles, vals_plot, color=color, linewidth=2.0, label=m)
+            ax.plot(angles, vals_plot, color=color, linewidth=2.0, label=m,
+                    solid_joinstyle="round", solid_capstyle="round")
             ax.fill(angles, vals_plot, color=color, alpha=0.08)
 
             # Annotate raw Scalability/Adaptability values for clarity (classic only)
