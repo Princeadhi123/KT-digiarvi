@@ -17,6 +17,8 @@ class EnvironmentConfig:
     reward_correct_w: float = 0.0
     reward_score_w: float = 1.0
     action_on: str = "category"
+    # Fraction of students to keep for scalability experiments (1.0 = all)
+    student_fraction: float = 1.0
     
     # Multi-objective shaping
     rew_improve_w: float = 0.0
@@ -55,6 +57,8 @@ class TrainingConfig:
     seed: int = 42
     select_best_on_val: bool = False
     val_episodes: int = 300
+    # Speed metric threshold on per-step normalized shaped reward
+    speed_threshold_norm: float = 0.7
 
 
 @dataclass
@@ -160,6 +164,19 @@ class SARLDQNConfig(DQNConfig):
     challenge_band_min: float = 0.2
     challenge_band_max: float = 0.6
 
+    # Regret-aware adaptation (optional)
+    # If enabled, SARL will use validation regret_ratio to further adapt epsilon
+    # and bias hybrid weights toward base when regret is high.
+    adapt_regret: bool = True
+    regret_ratio_target: float = 0.15
+    regret_ratio_tolerance: float = 0.02
+    regret_epsilon_up_step: float = 0.05
+    regret_epsilon_down_step: float = 0.02
+    # When regret is above target, increase base weight by this step (clipped to [weight_min, weight_max]).
+    regret_base_tilt_step: float = 0.1
+    # Optionally, make invalid actions slightly more punitive when regret is high (<= 0 keeps disabled)
+    regret_invalid_penalty_step: float = 0.0
+
 
 @dataclass
 class ExperimentConfig:
@@ -179,6 +196,17 @@ class ExperimentConfig:
     include_chance: bool = True
     include_trivial: bool = True
     include_markov: bool = True
+    # Multi-seed support (if provided, overrides per-model seed)
+    seeds: Optional[List[int]] = None
+    # Scalability evaluation toggles
+    evaluate_scalability: bool = False
+    scalability_small_fraction: float = 0.5
+    # Adaptability evaluation toggles
+    evaluate_adaptability: bool = False
+    adapt_pre_episodes: int = 100
+    adapt_post_episodes: int = 100
+    adapt_post_challenge_target: Optional[float] = None
+    adapt_post_challenge_band: Optional[float] = None
     
     # Output settings
     metrics_csv: Optional[str] = None
@@ -340,7 +368,10 @@ class Config:
         
         # Update experiment-level settings
         exp_attrs = ['models', 'include_chance', 'include_trivial', 'include_markov',
-                    'metrics_csv', 'demo', 'demo_episodes', 'demo_steps', 'demo_mode']
+                    'metrics_csv', 'demo', 'demo_episodes', 'demo_steps', 'demo_mode',
+                    'seeds', 'evaluate_scalability', 'scalability_small_fraction',
+                    'evaluate_adaptability', 'adapt_pre_episodes', 'adapt_post_episodes',
+                    'adapt_post_challenge_target', 'adapt_post_challenge_band']
         for attr in exp_attrs:
             if hasattr(args, attr):
                 value = getattr(args, attr)
@@ -349,6 +380,12 @@ class Config:
                 # Special handling: allow comma-separated string for models
                 if attr == 'models' and isinstance(value, str):
                     value = [m.strip().lower() for m in value.split(',') if m.strip()]
+                # Allow comma-separated list for seeds
+                if attr == 'seeds' and isinstance(value, str):
+                    try:
+                        value = [int(s.strip()) for s in value.split(',') if s.strip()]
+                    except Exception:
+                        pass
                 setattr(self.config, attr, value)
 
         # Optional global override for evaluation episodes across all models

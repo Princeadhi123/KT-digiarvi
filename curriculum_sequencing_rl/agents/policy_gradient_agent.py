@@ -1,5 +1,6 @@
 """Refactored policy gradient methods (A2C/A3C/PPO) using new architecture."""
 
+import logging
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -11,6 +12,8 @@ from ..core.base import BaseAgent, BaseTrainer, BaseNetwork, PolicyFunction
 from ..core.config import A2CConfig, A3CConfig, PPOConfig
 from ..core.utils import setup_device, compute_gae, normalize_advantages
 from ..core.factory import register_trainer
+
+logger = logging.getLogger('ExperimentRunner.PGTrainer')
 
 
 class ActorCriticNetwork(BaseNetwork):
@@ -210,6 +213,12 @@ class A2CTrainer(BaseTrainer):
     def __init__(self, config: A2CConfig):
         super().__init__(config)
         self.config = config
+        logger.info(
+            "Init A2CTrainer: batch_episodes=%s gamma=%.3f lr=%.5f",
+            getattr(self.config, 'batch_episodes', None),
+            float(self.config.gamma),
+            float(self.config.lr),
+        )
     
     def create_agent(self, env: Any) -> PolicyGradientAgent:
         """Create A2C agent."""
@@ -311,6 +320,13 @@ class A2CTrainer(BaseTrainer):
         """Update agent using collected batch."""
         all_states, all_actions, all_advantages = [], [], []
         all_returns, all_targets = [], []
+        # Log batch summary
+        try:
+            episodes_in_batch = len(batch_data['rewards'])
+            total_steps = int(sum(len(r) for r in batch_data['rewards']))
+        except Exception:
+            episodes_in_batch, total_steps = None, None
+        logger.info("[A2C] update: episodes=%s total_steps=%s", str(episodes_in_batch), str(total_steps))
         
         # Process each episode in batch
         for states, actions, rewards, values, targets in zip(
@@ -372,6 +388,19 @@ class A2CTrainer(BaseTrainer):
         torch.nn.utils.clip_grad_norm_(agent.network.parameters(), 1.0)
         agent.optimizer.step()
         
+        # Advantage and loss summaries
+        with torch.no_grad():
+            adv_mean = float(advantages_cat.mean().item())
+            adv_std = float(advantages_cat.std().item())
+            ret_mean = float(returns_cat.mean().item())
+            val_pred_mean = float(values.squeeze(-1).mean().item())
+        logger.info(
+            "[A2C] adv=returns-minus-values norm=yes mean=%.4f std=%.4f | returns_mean=%.4f | value_pred_mean=%.4f | losses: policy=%.4f value=%.4f entropy=%.4f bc=%.4f total=%.4f",
+            adv_mean, adv_std, ret_mean, val_pred_mean,
+            float(policy_loss.item()), float(value_loss.item()), float(entropy_loss.item()),
+            float(bc_loss.item()), float(total_loss.item()),
+        )
+        
         return {
             'policy_loss': policy_loss.item(),
             'value_loss': value_loss.item(),
@@ -388,11 +417,25 @@ class A3CTrainer(A2CTrainer):
     def __init__(self, config: A3CConfig):
         super().__init__(config)
         self.config = config
+        logger.info(
+            "Init A3CTrainer: rollouts_per_update=%s gamma=%.3f gae_lambda=%.2f lr=%.5f",
+            getattr(self.config, 'rollouts_per_update', None),
+            float(self.config.gamma),
+            float(self.config.gae_lambda),
+            float(self.config.lr),
+        )
     
     def _update_agent(self, agent: PolicyGradientAgent, batch_data: dict, env: Any) -> dict:
         """Update agent using GAE advantages."""
         all_states, all_actions, all_advantages = [], [], []
         all_returns, all_targets = [], []
+        # Log batch summary
+        try:
+            episodes_in_batch = len(batch_data['rewards'])
+            total_steps = int(sum(len(r) for r in batch_data['rewards']))
+        except Exception:
+            episodes_in_batch, total_steps = None, None
+        logger.info("[A3C] update: episodes=%s total_steps=%s", str(episodes_in_batch), str(total_steps))
         
         # Process each episode with GAE
         for states, actions, rewards, values, targets in zip(
@@ -442,6 +485,19 @@ class A3CTrainer(A2CTrainer):
         total_loss.backward()
         torch.nn.utils.clip_grad_norm_(agent.network.parameters(), 1.0)
         agent.optimizer.step()
+        
+        # Advantage and loss summaries
+        with torch.no_grad():
+            adv_mean = float(advantages_cat.mean().item())
+            adv_std = float(advantages_cat.std().item())
+            ret_mean = float(returns_cat.mean().item())
+            val_pred_mean = float(values.squeeze(-1).mean().item())
+        logger.info(
+            "[A3C] adv=GAE lambda=%.2f norm=yes mean=%.4f std=%.4f | returns_mean=%.4f | value_pred_mean=%.4f | losses: policy=%.4f value=%.4f entropy=%.4f bc=%.4f total=%.4f",
+            float(self.config.gae_lambda), adv_mean, adv_std, ret_mean, val_pred_mean,
+            float(policy_loss.item()), float(value_loss.item()), float(entropy_loss.item()),
+            float(bc_loss.item()), float(total_loss.item()),
+        )
         
         return {
             'policy_loss': policy_loss.item(),

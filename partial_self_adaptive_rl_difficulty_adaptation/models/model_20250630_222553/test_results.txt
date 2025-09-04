@@ -1,2 +1,0 @@
-Test Reward: 0.68
-Training Time: 25.13 minutes

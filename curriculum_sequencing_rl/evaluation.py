@@ -99,9 +99,14 @@ def _best_remaining_immediate_reward(env: Any) -> float:
                     break
             if nxt_idx is None:
                 continue
-            row = env.current_student_df.iloc[nxt_idx]
-            norm_score = float(row.get("normalized_score", 0.0))
-            best = max(best, env.rw_score * norm_score)
+            # Map local index to global dataframe index
+            try:
+                global_idx = env.current_student_indices[nxt_idx]  # type: ignore[attr-defined]
+                row = env.df.iloc[int(global_idx)]  # type: ignore[attr-defined]
+                norm_score = float(row.get("normalized_score", 0.0))
+                best = max(best, env.rw_score * norm_score)  # type: ignore[attr-defined]
+            except Exception:
+                continue
         return float(best)
     except Exception:
         return float("nan")
@@ -171,7 +176,8 @@ def eval_policy_regret(env: Any, policy_fn: Callable[[Any, int], int], mode: str
 
 
 def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], int], mode: str = "test", episodes: int = 200, max_steps_per_episode: Optional[int] = None,
-                                    debug_first_n_steps: int = 0, debug_print: bool = False) -> dict:
+                                    debug_first_n_steps: int = 0, debug_print: bool = False,
+                                    speed_threshold_norm: Optional[float] = None) -> dict:
     """Evaluate a policy and return a dict with shaped reward breakdown and diagnostics.
 
     Returns keys:
@@ -185,6 +191,9 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
       - term_improve, term_deficit, term_spacing, term_diversity, term_challenge: avg raw components
       - vpr: valid pick rate
       - regret, regret_ratio: instantaneous regret diagnostics
+      - speed_threshold_norm: threshold used for speed
+      - speed_steps_to_threshold_mean, speed_steps_to_threshold_median: steps (1-indexed) to first time reward_norm >= threshold (per episode; NaN if never)
+      - speed_success_rate: fraction of episodes that reached the threshold at least once
     """
     total_steps = 0
     reward_sum = 0.0
@@ -205,12 +214,17 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
     regret_ratio_sum = 0.0
     mask_violations = 0
     dbg_printed = 0
+    speed_steps_list = []
 
     interactive_ok = hasattr(env, "valid_action_ids") and hasattr(env, "_rows_by_action")
+    # Track per-episode returns for episodic accuracy/consistency
+    ep_returns = []
     for _ in range(episodes):
         state = env.reset(mode)
         done = False
         steps = 0
+        ep_threshold_step = None
+        ep_return = 0.0
         while not done:
             best_pre = _best_remaining_immediate_reward(env) if interactive_ok else float("nan")
             cur_cat = int(np.argmax(state[: env.action_size]))
@@ -218,6 +232,7 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
             next_state, reward, done, info = env.step(action)
             reward = float(reward)
             reward_sum += reward
+            ep_return += reward
             total_steps += 1
 
             if isinstance(info, dict):
@@ -239,6 +254,10 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
                     if not np.isnan(fv):
                         norm_sum += fv
                         norm_count += 1
+                        # Record speed threshold crossing at first occurrence in this episode
+                        if (speed_threshold_norm is not None) and (ep_threshold_step is None):
+                            if fv >= float(speed_threshold_norm):
+                                ep_threshold_step = steps + 1  # 1-indexed steps
                 except Exception:
                     pass
                 improve_sum += float(info.get("improve", 0.0))
@@ -270,8 +289,17 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
             if (max_steps_per_episode is not None) and (steps >= max_steps_per_episode):
                 # Force-terminate episode to avoid long/hanging runs
                 done = True
+        # Record per-episode return
+        ep_returns.append(float(ep_return))
+        # Record per-episode threshold crossing if it happened
+        if (speed_threshold_norm is not None) and (ep_threshold_step is not None):
+            speed_steps_list.append(ep_threshold_step)
 
     if total_steps <= 0:
+        # Compute speed aggregates
+        speed_mean = float(np.mean(speed_steps_list)) if len(speed_steps_list) > 0 else float("nan")
+        speed_median = float(np.median(speed_steps_list)) if len(speed_steps_list) > 0 else float("nan")
+        speed_success = (len(speed_steps_list) / float(episodes)) if episodes > 0 else float("nan")
         return {
             "reward": 0.0,
             "reward_base": 0.0,
@@ -290,9 +318,20 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
             "regret_ratio": float("nan"),
             "mask_violations": 0,
             "mask_violation_rate": float("nan"),
+            "speed_threshold_norm": float(speed_threshold_norm) if speed_threshold_norm is not None else float("nan"),
+            "speed_steps_to_threshold_mean": speed_mean,
+            "speed_steps_to_threshold_median": speed_median,
+            "speed_success_rate": speed_success,
+            # Episodic return aggregates
+            "ep_return_mean": float(np.mean(ep_returns)) if len(ep_returns) > 0 else 0.0,
+            "ep_return_std": float(np.std(ep_returns)) if len(ep_returns) > 0 else 0.0,
         }
 
     inv_steps = 1.0 / float(total_steps)
+    # Compute speed aggregates
+    speed_mean = float(np.mean(speed_steps_list)) if len(speed_steps_list) > 0 else float("nan")
+    speed_median = float(np.median(speed_steps_list)) if len(speed_steps_list) > 0 else float("nan")
+    speed_success = (len(speed_steps_list) / float(episodes)) if episodes > 0 else float("nan")
     return {
         "reward": reward_sum * inv_steps,
         "reward_base": base_sum * inv_steps,
@@ -312,4 +351,11 @@ def eval_policy_interactive_metrics(env: Any, policy_fn: Callable[[Any, int], in
         "regret_ratio": regret_ratio_sum * inv_steps,
         "mask_violations": float(mask_violations),
         "mask_violation_rate": (float(mask_violations) * inv_steps),
+        "speed_threshold_norm": float(speed_threshold_norm) if speed_threshold_norm is not None else float("nan"),
+        "speed_steps_to_threshold_mean": speed_mean,
+        "speed_steps_to_threshold_median": speed_median,
+        "speed_success_rate": speed_success,
+        # Episodic return aggregates
+        "ep_return_mean": float(np.mean(ep_returns)) if len(ep_returns) > 0 else 0.0,
+        "ep_return_std": float(np.std(ep_returns)) if len(ep_returns) > 0 else 0.0,
     }

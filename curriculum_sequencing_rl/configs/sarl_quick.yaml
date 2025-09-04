@@ -1,0 +1,90 @@
+environment:
+  data_path: "preprocessed_kt_data.csv"
+  reward_correct_w: 0.0
+  reward_score_w: 1.0
+  # Hybrid weights
+  hybrid_base_w: 1.0
+  hybrid_mastery_w: 1.0
+  hybrid_motivation_w: 1.0
+  # Multi-objective shaping weights
+  rew_improve_w: 0.5
+  rew_deficit_w: 0.5
+  rew_spacing_w: 0.2
+  rew_diversity_w: 0.2
+  rew_challenge_w: 0.2
+  # Shaping hyperparameters
+  ema_alpha: 0.3
+  need_threshold: 0.6
+  spacing_window: 5
+  diversity_recent_k: 5
+  challenge_target: 0.7
+  challenge_band: 0.4
+  invalid_penalty: -0.1
+
+seeds: [123, 456, 789]
+
+# SARL-only quick verification
+models: ["sarl"]
+
+# SARL (Self-Adaptive RL) configuration (keys align to SARLDQNConfig)
+sarl:
+  episodes: 80  # quick run: ~60–100 episodes
+  lr: 0.0003
+  gamma: 0.997
+  batch_size: 512
+  buffer_size: 120000
+  hidden_dim: 512
+  eps_start: 1.0
+  eps_end: 0.01
+  eps_decay_steps: 20000
+  target_tau: 0.01
+  target_update_interval: 1
+  select_best_on_val: true
+  val_episodes: 200
+  eval_episodes: 120
+  speed_threshold_norm: 0.6
+  adapt_interval: 3
+  adapt_regret: true
+  regret_ratio_target: 0.15
+  regret_ratio_tolerance: 0.02
+  regret_epsilon_up_step: 0.05
+  regret_epsilon_down_step: 0.02
+  regret_base_tilt_step: 0.1
+  regret_invalid_penalty_step: 0.02
+  hybrid_base_target_share: 0.5
+  hybrid_mastery_target_share: 0.25
+  hybrid_motivation_target_share: 0.25
+  weight_lr: 0.3
+  weight_min: 0.1
+  weight_max: 3.0
+  share_tolerance: 0.05
+  invalid_rate_hi: 0.15
+  invalid_rate_lo: 0.02
+  epsilon_up_step: 0.05
+  epsilon_down_step: 0.02
+  eps_min: 0.01
+  eps_max: 1.0
+  lr_patience: 5
+  lr_reduce_factor: 0.5
+  min_lr: 1e-5
+  challenge_increase_threshold: 0.85
+  challenge_decrease_threshold: 0.55
+  challenge_target_step: 0.05
+  challenge_target_min: 0.4
+  challenge_target_max: 0.9
+  challenge_band_step: -0.05
+  challenge_band_min: 0.2
+  challenge_band_max: 0.6
+
+# Global eval settings for quick run
+include_chance: false
+include_trivial: false
+include_markov: false
+
+# Single-seed quick run (omit 'seeds' to use the model's seed)
+# Disable heavy cross-evaluations for speed
+evaluate_scalability: false
+evaluate_adaptability: false
+
+# Output CSV (separate file for this quick check)
+metrics_csv: "sarl_quick.csv"
