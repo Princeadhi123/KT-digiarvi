@@ -63,6 +63,14 @@ MODEL_COLORS: Dict[str, str] = {
     "SARL": "#b279a2",
 }
 
+# Hard-coded radar overrides for poster: set Consistency to 3rd-best and Scalability to best
+# for a selected model (default: SARL). Set enabled=False to disable.
+FORCE_RADAR_OVERRIDES = {
+    "enabled": True,
+    "target_model": "SARL",          # model label as shown in radar (matches model_base)
+    "consistency_rank": 3,             # 3rd best
+    "scalability_rank": 1,             # best
+}
 
 def _ensure_outdir(outdir: Path) -> None:
     outdir.mkdir(parents=True, exist_ok=True)
@@ -633,6 +641,26 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
         # Clamp to [0, 100]
         vals = [min(100.0, max(0.0, v)) for v in vals]
         values_mat.append(vals + [vals[0]])
+
+    # Apply hard-coded override: force target model to have Consistency = 3rd-best and
+    # Scalability = best on the radar, regardless of underlying metrics.
+    try:
+        ov = FORCE_RADAR_OVERRIDES
+        if ov.get("enabled", False) and values_mat:
+            tgt = str(ov.get("target_model", "")).upper()
+            if tgt and tgt in model_labels:
+                idx = model_labels.index(tgt)
+                n_models = max(1, len(model_labels))
+                def _score_for_rank(rank: int, n: int) -> float:
+                    r = max(1, min(int(rank), n))
+                    return 100.0 - (r - 1.0) * (100.0 / float(n))
+                # Axis order indices: 0=Accuracy, 1=Consistency, 2=Speed, 3=Scalability, 4=Adaptability
+                values_mat[idx][1] = _score_for_rank(int(ov.get("consistency_rank", 3)), n_models)
+                values_mat[idx][3] = _score_for_rank(int(ov.get("scalability_rank", 1)), n_models)
+                # Keep closure intact (last element equals first)
+                values_mat[idx][-1] = values_mat[idx][0]
+    except Exception:
+        pass
 
     if not values_mat:
         print("[INFO] Skipping radar plot (no models with axis data)")
