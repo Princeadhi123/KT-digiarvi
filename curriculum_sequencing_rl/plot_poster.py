@@ -874,7 +874,7 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
 
     # Draw bold axis labels outside the 100 ring for clarity
     try:
-        r_label = 114.5
+        r_label = 119.5
         for ang, lab in zip(angles[:-1], labels):
             # Angle-aware alignment for readability
             c = np.cos(ang)
