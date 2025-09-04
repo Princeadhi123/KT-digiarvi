@@ -827,41 +827,7 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
                 hide()
             except Exception:
                 pass
-    # Add summary annotations inside the chart (top-right)
-    # For the poster, use explicit labels as requested
-    try:
-        line1 = "Best Overall: SARL"
-        line2 = "Most Consistent: QL"
-        for yy, txt in [(0.98, line1), (0.93, line2)]:
-            t = ax.text(0.98, yy, txt, transform=ax.transAxes, ha="right", va="top",
-                        fontsize=11, fontweight="bold", color="#111111", zorder=20)
-            try:
-                t.set_path_effects([
-                    path_effects.Stroke(linewidth=3.0, foreground="white"),
-                    path_effects.Normal(),
-                ])
-            except Exception:
-                pass
-    except Exception:
-        pass
-    else:
-        ax.set_rlabel_position(0)
-        ax.set_ylim(0, 115)
-        ax.set_yticks([20, 40, 60, 80, 100])
-        ax.set_yticklabels(["20", "40", "60", "80", ""], color="#555555")
-        # Force ticks to only these positions (including 100)
-        ax.yaxis.set_major_locator(mtick.FixedLocator([20, 40, 60, 80, 100]))
-        # Only draw circular gridlines; disable angular spokes
-        ax.grid(True, axis="y", alpha=0.3)
-        ax.xaxis.grid(False)
-        # Hide the polar frame completely to avoid any circle beyond 100
-        for hide in (lambda: ax.spines["polar"].set_visible(False),
-                     lambda: ax.set_frame_on(False),
-                     lambda: ax.patch.set_visible(False)):
-            try:
-                hide()
-            except Exception:
-                pass
+    # Top-right summary annotations removed per request; keep highlight radial styling above.
 
     # Style the 100 circular gridline to be as light as other gridlines
     try:
@@ -987,8 +953,25 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
 
     # Legend placement (applies to both styles)
     if len(model_labels) > 3:
+        # Add centered annotation above the legend at the bottom
+        try:
+            bottom_note = "Best Overall: SARL   Most Consistent: QL"
+            ax.text(
+                0.5,
+                -0.08,
+                bottom_note,
+                transform=ax.transAxes,
+                ha="center",
+                va="top",
+                fontsize=11,
+                fontweight="normal",
+                color="#111111",
+            )
+        except Exception:
+            pass
         ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=min(len(model_labels), 6), frameon=False)
-        fig.tight_layout(rect=[0, 0.12, 1, 1])
+        # Leave a bit more space at the bottom for both the annotation and legend
+        fig.tight_layout(rect=[0, 0.16, 1, 1])
     else:
         ax.legend(loc="upper left", bbox_to_anchor=(1.05, 1.05), frameon=False)
         fig.tight_layout(rect=[0, 0, 0.85, 1])
