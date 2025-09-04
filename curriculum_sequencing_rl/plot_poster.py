@@ -475,7 +475,7 @@ def generate_all_plots(df: pd.DataFrame, outdir: Path) -> List[Path]:
     return out_paths
 
 
-def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar_mode: str = "rank", radar_style: str = "highlight", radar_baseline: str | None = None) -> Path | None:
+def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar_mode: str = "rank", radar_style: str = "highlight", radar_baseline: str | None = None, radar_title: str = "Comparative Analysis") -> Path | None:
     """Plot radar chart for evaluation axes from aggregated rows.
 
     Modes:
@@ -721,14 +721,6 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
 
         sufx = "Rank-normalized (Best=100)" if mode_lower == "rank" else "0–100"
         fig.suptitle(f"Evaluation Axes — {sufx} • Small-multiples", color=THEME_HEX, y=0.98)
-        fig.tight_layout(rect=[0, 0, 1, 0.96])
-        out_path = outdir / "poster_radar_axes.png"
-        fig.savefig(out_path, dpi=300)
-        plt.close(fig)
-        return out_path
-
-    # Special style: baseline delta (center at 0 mapped to 50 ring)
-    if style_lower == "baseline_delta":
         # Determine baseline label/index (case-insensitive against model_labels)
         baseline = (radar_baseline or (model_labels[0] if model_labels else None))
         if baseline is None:
@@ -784,7 +776,7 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
         ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=min(len(model_labels), 6), frameon=False)
         fig.tight_layout(rect=[0, 0.12, 1, 1])
         out_path = outdir / "poster_radar_axes.png"
-        fig.savefig(out_path, dpi=300)
+        fig.savefig(out_path, dpi=300, bbox_inches="tight", pad_inches=0.05)
         plt.close(fig)
         return out_path
 
@@ -808,7 +800,7 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
     # Radial limits and grid styling by style
     if str(radar_style).lower() == "highlight":
         ax.set_rlabel_position(0)
-        ax.set_ylim(0, 100)
+        ax.set_ylim(0, 115)
         # Include 100 so the outer ring is a true circular gridline
         ax.set_yticks([25, 50, 75, 100])
         # Hide the '100' tick label (we'll add our own label at the top)
@@ -826,7 +818,7 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
                 pass
     else:
         ax.set_rlabel_position(0)
-        ax.set_ylim(0, 100)
+        ax.set_ylim(0, 115)
         ax.set_yticks([20, 40, 60, 80, 100])
         ax.set_yticklabels(["20", "40", "60", "80", ""], color="#555555")
         # Force ticks to only these positions (including 100)
@@ -864,6 +856,42 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
             ])
         except Exception:
             pass
+    except Exception:
+        pass
+
+    # Draw bold axis labels outside the 100 ring for clarity
+    try:
+        r_label = 113.0
+        for ang, lab in zip(angles[:-1], labels):
+            # Angle-aware alignment for readability
+            c = np.cos(ang)
+            # Horizontal alignment
+            if c > 0.1:
+                ha = "left"
+            elif c < -0.1:
+                ha = "right"
+            else:
+                ha = "center"
+            va = "center"
+            txt = ax.text(
+                ang,
+                r_label,
+                lab,
+                ha=ha,
+                va=va,
+                fontsize=13,
+                fontweight="bold",
+                color="#111111",
+                clip_on=False,
+                zorder=12,
+            )
+            try:
+                txt.set_path_effects([
+                    path_effects.Stroke(linewidth=3.0, foreground="white"),
+                    path_effects.Normal(),
+                ])
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -918,29 +946,23 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
                 adapt_idx = labels.index("Adaptability")
                 r_scal = min(100.0, max(0.0, vals_plot[scal_idx] + 4.0))
                 r_adap = min(100.0, max(0.0, vals_plot[adapt_idx] + 4.0))
-                ax.text(angles[scal_idx], r_scal, f"{scal_orig:.2f}", color=color, fontsize=8, ha="center", va="bottom")
-                ax.text(angles[adapt_idx], r_adap, f"{adapt_orig:.2f}", color=color, fontsize=8, ha="center", va="bottom")
             except Exception:
                 pass
+    # Apply title for highlight/classic styles (fig-level titles are handled in other modes)
+    try:
+        ax.set_title(str(radar_title), color=THEME_HEX, pad=18)
+    except Exception:
+        pass
 
-    # Axis labels outside the circle in bold (just outside the 100 ring)
-    r_label = 103.0
-    for j, lbl in enumerate(labels):
-        ang = angles[j]
-        ax.text(ang, r_label, lbl, ha="center", va="center", fontsize=12, fontweight="bold", color="#111111", clip_on=False, zorder=10)
-
-    # Title
-    ax.set_title("Comparative Analysis", color=THEME_HEX, pad=20, fontsize=16, fontweight="bold")
-
-    # Legend placement by style
-    if style_is_highlight:
+    # Legend placement (applies to both styles)
+    if len(model_labels) > 3:
         ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=min(len(model_labels), 6), frameon=False)
         fig.tight_layout(rect=[0, 0.12, 1, 1])
     else:
         ax.legend(loc="upper left", bbox_to_anchor=(1.05, 1.05), frameon=False)
         fig.tight_layout(rect=[0, 0, 0.85, 1])
     out_path = outdir / "poster_radar_axes.png"
-    fig.savefig(out_path, dpi=300)
+    fig.savefig(out_path, dpi=300, bbox_inches="tight", pad_inches=0.05)
     plt.close(fig)
     return out_path
 
@@ -965,6 +987,8 @@ def parse_args() -> argparse.Namespace:
                    help="Radar style: 'highlight', 'classic', 'small_multiples', or 'baseline_delta'")
     p.add_argument("--radar_baseline", type=str, default=None,
                    help="Baseline model (by name) for 'baseline_delta' style. Defaults to first in --models.")
+    p.add_argument("--radar_title", type=str, default="Comparative Analysis",
+                   help="Title to display above radar (highlight/classic styles)")
     return p.parse_args()
 
 
@@ -998,6 +1022,7 @@ def main() -> None:
         radar_mode=getattr(args, "radar_mode", "rank"),
         radar_style=getattr(args, "radar_style", "highlight"),
         radar_baseline=getattr(args, "radar_baseline", None),
+        radar_title=getattr(args, "radar_title", "Comparative Analysis"),
     )
 
     if radar_path is not None:
