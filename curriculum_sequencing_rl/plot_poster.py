@@ -639,8 +639,9 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
                 vals[3] = float(row.iloc[0]["__axis_scalability_radar"]) if pd.notna(row.iloc[0]["__axis_scalability_radar"]) else vals[3]
             if "__axis_adaptability_radar" in agg_df.columns:
                 vals[4] = float(row.iloc[0]["__axis_adaptability_radar"]) if pd.notna(row.iloc[0]["__axis_adaptability_radar"]) else vals[4]
-        # Clamp to [0, 100]
-        vals = [min(100.0, max(0.0, v)) for v in vals]
+        # Clamp for plotting to [0, 98.5] to avoid touching the outer ring visually
+        poly_max = 98.5
+        vals = [min(poly_max, max(0.0, v)) for v in vals]
         values_mat.append(vals + [vals[0]])
 
     # Apply hard-coded override: force target model to have Consistency = 3rd-best and
@@ -785,6 +786,11 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
     ax.set_theta_direction(-1)
     ax.set_xticks(angles[:-1])
     ax.set_xticklabels([])
+    # Remove small radial tick marks (spokes) at the category angles
+    try:
+        ax.tick_params(axis="x", which="major", length=0)
+    except Exception:
+        pass
 
     # Prepare composite score and per-axis winners from core (non-closed) values
     values_core = np.array([v[:-1] for v in values_mat], dtype=float)
@@ -807,7 +813,9 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
         ax.set_yticklabels(["25", "50", "75", ""], color="#666666")
         # Force ticks to only these positions (including 100)
         ax.yaxis.set_major_locator(mtick.FixedLocator([25, 50, 75, 100]))
-        ax.grid(True, alpha=0.25)
+        # Only draw circular (radial) gridlines; disable angular spokes
+        ax.grid(True, axis="y", alpha=0.25)
+        ax.xaxis.grid(False)
         # Ensure the outermost circle is the 100 ring by hiding the polar frame completely
         for hide in (lambda: ax.spines["polar"].set_visible(False),
                      lambda: ax.set_frame_on(False),
@@ -823,7 +831,9 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
         ax.set_yticklabels(["20", "40", "60", "80", ""], color="#555555")
         # Force ticks to only these positions (including 100)
         ax.yaxis.set_major_locator(mtick.FixedLocator([20, 40, 60, 80, 100]))
-        ax.grid(True, alpha=0.3)
+        # Only draw circular gridlines; disable angular spokes
+        ax.grid(True, axis="y", alpha=0.3)
+        ax.xaxis.grid(False)
         # Hide the polar frame completely to avoid any circle beyond 100
         for hide in (lambda: ax.spines["polar"].set_visible(False),
                      lambda: ax.set_frame_on(False),
@@ -833,16 +843,16 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
             except Exception:
                 pass
 
-    # Style the 100 circular gridline as the thick black outer ring
+    # Style the 100 circular gridline to be as light as other gridlines
     try:
         glines = ax.yaxis.get_gridlines()
         if glines:
             gl = glines[-1]
-            gl.set_color("#000000")
-            gl.set_linewidth(3.2)
+            gl.set_color("#b0b0b0")
+            gl.set_linewidth(1.0)
             gl.set_linestyle("-")
-            gl.set_alpha(1.0)
-            gl.set_zorder(8)
+            gl.set_alpha(0.25)
+            # Keep at default z-order so data strokes remain visible above
     except Exception:
         pass
     # Explicit '100' label just inside the ring at the top to avoid overlap with axis label
