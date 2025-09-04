@@ -858,17 +858,11 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
             # Keep at default z-order so data strokes remain visible above
     except Exception:
         pass
-    # Explicit '100' label just inside the ring at the top to avoid overlap with axis label
+    # Explicit '100' label just OUTSIDE the outer ring at the top (theta=0)
+    # Style to match other radial tick labels (gray, smaller, not bold)
     try:
-        txt100 = ax.text(0.0, 98.5, "100", ha="center", va="top", fontsize=13, fontweight="bold",
-                         color="#000000", clip_on=False, zorder=11)
-        try:
-            txt100.set_path_effects([
-                path_effects.Stroke(linewidth=3.0, foreground="white"),
-                path_effects.Normal(),
-            ])
-        except Exception:
-            pass
+        ax.text(0.0, 101.5, "100", ha="center", va="bottom", fontsize=10, fontweight="normal",
+                color="#666666", clip_on=False, zorder=6)
     except Exception:
         pass
 
@@ -886,9 +880,11 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
             else:
                 ha = "center"
             va = "center"
+            # Nudge Adaptability a bit further out so the full word clears the 100 ring
+            r_this = r_label + (35.0 if str(lab).lower() == "adaptability" else 0.0)
             txt = ax.text(
                 ang,
-                r_label,
+                r_this,
                 lab,
                 ha=ha,
                 va=va,
