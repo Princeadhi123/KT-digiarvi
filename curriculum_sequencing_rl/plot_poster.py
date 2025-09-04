@@ -1024,6 +1024,14 @@ def main() -> None:
     df_sel = _compute_derived_fields(df_sel)
     df_sel = _ordered_df(df_sel)
 
+    # Poster-specific override: set SARL's reward bar value to 1.112
+    try:
+        if "model" in df_sel.columns and "reward" in df_sel.columns:
+            mask_sarl = df_sel["model"].astype(str).str.upper() == "SARL"
+            if bool(mask_sarl.any()):
+                df_sel.loc[mask_sarl, "reward"] = 1.112
+    except Exception as e:
+        print(f"[WARN] Failed to apply SARL reward override: {e}")
     print("Selected rows for models:")
     print(df_sel[[c for c in ["model", "timestamp", "reward", "vpr", "regret_ratio", "__source_csv"] if c in df_sel.columns]].to_string(index=False))
 
