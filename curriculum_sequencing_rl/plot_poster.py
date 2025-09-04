@@ -827,6 +827,23 @@ def plot_radar_axes(df_all: pd.DataFrame, models: List[str], outdir: Path, radar
                 hide()
             except Exception:
                 pass
+    # Add summary annotations inside the chart (top-right)
+    # For the poster, use explicit labels as requested
+    try:
+        line1 = "Best Overall: SARL"
+        line2 = "Most Consistent: QL"
+        for yy, txt in [(0.98, line1), (0.93, line2)]:
+            t = ax.text(0.98, yy, txt, transform=ax.transAxes, ha="right", va="top",
+                        fontsize=11, fontweight="bold", color="#111111", zorder=20)
+            try:
+                t.set_path_effects([
+                    path_effects.Stroke(linewidth=3.0, foreground="white"),
+                    path_effects.Normal(),
+                ])
+            except Exception:
+                pass
+    except Exception:
+        pass
     else:
         ax.set_rlabel_position(0)
         ax.set_ylim(0, 115)
