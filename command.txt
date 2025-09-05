@@ -1,0 +1,5 @@
+Commands to use for execution:
+
+python -m curriculum_sequencing_rl.main --config curriculum_sequencing_rl\configs\quick_multi_scal_adapt.yaml
+
+python -m curriculum_sequencing_rl.plot_poster --csv "c:\Users\pdaadh\Desktop\KT digiarvi\all_models.csv" --outdir "c:\Users\pdaadh\Desktop\KT digiarvi\curriculum_sequencing_rl\poster" --models "ql,dqn,a2c,a3c,ppo,sarl" --select latest --radar_mode rank --radar_style highlight
